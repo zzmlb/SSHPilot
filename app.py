@@ -331,7 +331,6 @@ async def get_conn(node_id: int):
             password=decrypt_field(r.get("password", "")),
             private_key=decrypt_field(r.get("private_key", "")),
             auth_type=r["auth_type"],
-            key_file=r.get("key_file", ""),
         )
     except Exception as e:
         raise HTTPException(502, f"SSH connection failed: {e}")

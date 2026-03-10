@@ -123,7 +123,7 @@ function renderScanResults(results, container) {
         ok.forEach(r => {
             const srcTag = r.source === 'ssh_config' ? 'Config' : r.source === 'known_hosts' ? 'Known' : '节点';
             const srcCls = r.source === 'ssh_config' ? 'config' : r.source === 'known_hosts' ? 'known' : 'key';
-            html += `<div class="ssh-item"><div class="ssh-item-info"><div class="ssh-item-name"><span class="scan-dot dot-ok"></span>${esc(r.alias || r.host)}</div><div class="ssh-item-meta">${esc(r.user)}@${esc(r.host)}:${r.port}</div><span class="ssh-item-tag ssh-tag-${srcCls}">${srcTag}</span></div><div class="ssh-item-actions"><button class="btn-icon" title="添加为节点" onclick="quickAddNode('${escJs(r.alias||r.host)}','${escJs(r.host)}',${r.port},'${escJs(r.user)}','')"><i class="fas fa-plus-circle" style="color:var(--success)"></i></button></div></div>`;
+            html += `<div class="ssh-item"><div class="ssh-item-info"><div class="ssh-item-name"><span class="scan-dot dot-ok"></span>${esc(r.alias || r.host)}</div><div class="ssh-item-meta">${esc(r.user)}@${esc(r.host)}:${r.port}</div><span class="ssh-item-tag ssh-tag-${srcCls}">${srcTag}</span></div><div class="ssh-item-actions"><button class="btn-icon" title="添加为节点" onclick="quickAddNode('${escJs(r.alias||r.host)}','${escJs(r.host)}',${r.port},'${escJs(r.user)}')"><i class="fas fa-plus-circle" style="color:var(--success)"></i></button></div></div>`;
         });
     }
     if (fail.length) {
@@ -161,7 +161,7 @@ function renderSSHPanel(data, scanData, container) {
         data.configs.forEach(c => {
             const host = c.hostname || c.alias;
             const user = c.user || "root";
-            html += `<div class="ssh-item"><div class="ssh-item-info"><div class="ssh-item-name">${esc(c.alias)}</div><div class="ssh-item-meta">${esc(user)}@${esc(host)}:${c.port}</div>${c.identity_file ? `<div class="ssh-item-meta"><i class="fas fa-key" style="font-size:9px"></i> ${esc(c.identity_file)}</div>` : ""}<span class="ssh-item-tag ssh-tag-config">Config</span></div><div class="ssh-item-actions"><button class="btn-icon" title="添加为节点" onclick="quickAddNode('${escJs(c.alias)}','${escJs(host)}',${c.port},'${escJs(user)}','${escJs(c.identity_file)}')"><i class="fas fa-plus-circle" style="color:var(--success)"></i></button></div></div>`;
+            html += `<div class="ssh-item"><div class="ssh-item-info"><div class="ssh-item-name">${esc(c.alias)}</div><div class="ssh-item-meta">${esc(user)}@${esc(host)}:${c.port}</div>${c.identity_file ? `<div class="ssh-item-meta"><i class="fas fa-key" style="font-size:9px"></i> ${esc(c.identity_file)}</div>` : ""}<span class="ssh-item-tag ssh-tag-config">Config</span></div><div class="ssh-item-actions"><button class="btn-icon" title="添加为节点" onclick="quickAddNode('${escJs(c.alias)}','${escJs(host)}',${c.port},'${escJs(user)}')"><i class="fas fa-plus-circle" style="color:var(--success)"></i></button></div></div>`;
         });
         html += `</div>`;
     }
@@ -172,7 +172,7 @@ function renderSSHPanel(data, scanData, container) {
         html += `<div class="ssh-section"><div class="ssh-section-title"><i class="fas fa-globe"></i> Known Hosts <span class="ssh-section-count">${khTotal}</span></div>`;
         if (data.known_hosts.length) {
             data.known_hosts.forEach(h => {
-                html += `<div class="ssh-item"><div class="ssh-item-info"><div class="ssh-item-name">${esc(h.host)}</div><div class="ssh-item-meta">${esc(h.key_type)}${h.port !== 22 ? ` :${h.port}` : ""}</div><span class="ssh-item-tag ssh-tag-known">Known</span></div><div class="ssh-item-actions"><button class="btn-icon" title="添加为节点" onclick="quickAddNode('${escJs(h.host)}','${escJs(h.host)}',${h.port},'root','')"><i class="fas fa-plus-circle" style="color:var(--success)"></i></button></div></div>`;
+                html += `<div class="ssh-item"><div class="ssh-item-info"><div class="ssh-item-name">${esc(h.host)}</div><div class="ssh-item-meta">${esc(h.key_type)}${h.port !== 22 ? ` :${h.port}` : ""}</div><span class="ssh-item-tag ssh-tag-known">Known</span></div><div class="ssh-item-actions"><button class="btn-icon" title="添加为节点" onclick="quickAddNode('${escJs(h.host)}','${escJs(h.host)}',${h.port},'root')"><i class="fas fa-plus-circle" style="color:var(--success)"></i></button></div></div>`;
             });
         }
         if (data.known_hosts_hashed > 0) {
@@ -189,7 +189,7 @@ function renderSSHPanel(data, scanData, container) {
     if (scanData) renderScanResults(scanData, document.getElementById("ssh-scan-results"));
 }
 
-function quickAddNode(name, host, port, user, keyFile) {
+function quickAddNode(name, host, port, user) {
     document.getElementById("node-modal-title").textContent = "添加节点";
     document.getElementById("node-form").reset();
     document.getElementById("node-edit-id").value = "";
@@ -197,13 +197,7 @@ function quickAddNode(name, host, port, user, keyFile) {
     document.getElementById("node-host").value = host;
     document.getElementById("node-port").value = port;
     document.getElementById("node-username").value = user;
-    if (keyFile) {
-        document.getElementById("node-auth-type").value = "key_file";
-        document.getElementById("node-key-file").value = keyFile;
-    } else {
-        document.getElementById("node-auth-type").value = "key_file";
-        document.getElementById("node-key-file").value = "";
-    }
+    document.getElementById("node-auth-type").value = "key_file";
     toggleAuthFields();
     openModal("node-modal");
 }
@@ -291,7 +285,7 @@ async function editNode(id) {
         const n = await apiJson(`/api/nodes/${id}`);
         document.getElementById("node-modal-title").textContent = "编辑节点";
         document.getElementById("node-edit-id").value = n.id;
-        ["name","host","port","username","auth-type","password","private-key","key-file","country","provider","business"]
+        ["name","host","port","username","auth-type","password","private-key","country","provider","business"]
             .forEach(f => { const el = document.getElementById("node-" + f); if (el) el.value = n[f.replace(/-/g,"_")] || ""; });
         toggleAuthFields();
         openModal("node-modal");
@@ -302,7 +296,7 @@ async function saveNode(e) {
     e.preventDefault();
     const editId = document.getElementById("node-edit-id").value;
     const data = {};
-    ["name","host","port","username","auth_type","password","private_key","key_file","country","provider","business"]
+    ["name","host","port","username","auth_type","password","private_key","country","provider","business"]
         .forEach(f => { const el = document.getElementById("node-" + f.replace(/_/g,"-")); data[f] = el ? (f === "port" ? parseInt(el.value) : el.value) : ""; });
     try {
         if (editId) { await apiJson(`/api/nodes/${editId}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }); toast("节点已更新", "success"); }
@@ -323,7 +317,6 @@ async function removeNode(id) {
 function toggleAuthFields() {
     const v = document.getElementById("node-auth-type").value;
     document.getElementById("password-field").classList.toggle("hidden", v !== "password");
-    document.getElementById("keyfile-field").classList.toggle("hidden", v !== "key_file");
     document.getElementById("key-field").classList.toggle("hidden", v !== "key");
 }
 

@@ -132,9 +132,8 @@
                 <div class="form-row"><div class="form-col"><label>国家/地区</label><input type="text" id="node-country" placeholder="中国 / 美国"></div><div class="form-col"><label>厂商</label><input type="text" id="node-provider" placeholder="阿里云 / AWS"></div></div>
                 <div class="form-row"><div class="form-col" style="flex:1"><label>业务</label><input type="text" id="node-business" placeholder="Web服务 / 数据库"></div></div>
                 <label>认证方式</label>
-                <select id="node-auth-type" onchange="toggleAuthFields()"><option value="password">密码</option><option value="key_file">本地密钥文件</option><option value="key">粘贴私钥</option></select>
+                <select id="node-auth-type" onchange="toggleAuthFields()"><option value="password">密码</option><option value="key_file">SSH 免密直连</option><option value="key">粘贴私钥</option></select>
                 <div id="password-field"><label>密码</label><input type="password" id="node-password" placeholder="密码"></div>
-                <div id="keyfile-field" class="hidden"><label>密钥路径</label><input type="text" id="node-key-file" placeholder="~/.ssh/id_rsa"><p class="hint">留空默认 ~/.ssh/id_rsa</p></div>
                 <div id="key-field" class="hidden"><label>私钥内容</label><textarea id="node-private-key" rows="3" placeholder="-----BEGIN RSA PRIVATE KEY-----"></textarea></div>
                 <div class="modal-actions"><button type="button" class="btn-cancel" onclick="closeModal('node-modal')">取消</button><button type="submit" class="btn-primary">保存</button></div>
             </form>

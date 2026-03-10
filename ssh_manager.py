@@ -14,14 +14,13 @@ TRASH_DIR = "~/.ssh-fm-trash"
 class SSHConnection:
     def __init__(self, host: str, port: int, username: str,
                  password: str = "", private_key: str = "", auth_type: str = "password",
-                 key_file: str = ""):
+                 key_file: str = "", **_kw):
         self.host = host
         self.port = port
         self.username = username
         self.password = password
         self.private_key = private_key
         self.auth_type = auth_type
-        self.key_file = key_file
         self.client: Optional[paramiko.SSHClient] = None
         self.sftp: Optional[paramiko.SFTPClient] = None
         self.last_active = time.time()
@@ -38,11 +37,8 @@ class SSHConnection:
             "timeout": 10,
         }
         if self.auth_type == "key_file":
-            if self.key_file:
-                kwargs["key_filename"] = os.path.expanduser(self.key_file)
-            else:
-                kwargs["allow_agent"] = True
-                kwargs["look_for_keys"] = True
+            kwargs["allow_agent"] = True
+            kwargs["look_for_keys"] = True
         elif self.auth_type == "key" and self.private_key:
             pkey = paramiko.RSAKey.from_private_key(io.StringIO(self.private_key))
             kwargs["pkey"] = pkey
