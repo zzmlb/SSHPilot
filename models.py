@@ -1,4 +1,7 @@
+import os
 import sqlalchemy
+
+os.makedirs("data", exist_ok=True)
 
 metadata = sqlalchemy.MetaData()
 
