@@ -74,11 +74,22 @@ def verify_password(password: str, stored: str) -> bool:
 def get_admin_credentials() -> tuple[str, str]:
     """Read admin credentials from auth.conf. Auto-generate if not exist."""
     if os.path.exists(CONFIG_FILE):
+        saved_pwd_hint = ""
         with open(CONFIG_FILE, "r") as f:
             for line in f:
-                line = line.strip()
-                if line and ":" in line and not line.startswith("#"):
-                    user, pwd_hash = line.split(":", 1)
+                stripped = line.strip()
+                if stripped.startswith("# Default auto-generated password:"):
+                    saved_pwd_hint = stripped.split(":", 1)[1].strip()
+                if stripped and ":" in stripped and not stripped.startswith("#"):
+                    user, pwd_hash = stripped.split(":", 1)
+                    print(f"\n{'='*50}")
+                    print(f"  SSH File Manager 登录信息")
+                    print(f"  用户名: {user.strip()}")
+                    if saved_pwd_hint:
+                        print(f"  密  码: {saved_pwd_hint}")
+                    else:
+                        print(f"  密  码: (见 {CONFIG_FILE})")
+                    print(f"{'='*50}\n")
                     return user.strip(), pwd_hash.strip()
     auto_pwd = secrets.token_urlsafe(16)
     pwd_hash = hash_password(auto_pwd)
@@ -91,10 +102,11 @@ def get_admin_credentials() -> tuple[str, str]:
         f.write(f"admin:{pwd_hash}\n")
     os.chmod(CONFIG_FILE, 0o600)
     print(f"\n{'='*50}")
-    print(f"  Auto-generated admin credentials:")
-    print(f"  Username: admin")
-    print(f"  Password: {auto_pwd}")
-    print(f"  (Saved in {CONFIG_FILE})")
+    print(f"  SSH File Manager 首次启动")
+    print(f"  已自动生成管理员账号:")
+    print(f"  用户名: admin")
+    print(f"  密  码: {auto_pwd}")
+    print(f"  (保存在 {CONFIG_FILE})")
     print(f"{'='*50}\n")
     return "admin", pwd_hash
 
