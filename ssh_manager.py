@@ -38,13 +38,17 @@ class SSHConnection:
             "timeout": 10,
         }
         if self.auth_type == "key_file":
-            key_path = os.path.expanduser(self.key_file or "~/.ssh/id_rsa")
-            kwargs["key_filename"] = key_path
+            if self.key_file:
+                kwargs["key_filename"] = os.path.expanduser(self.key_file)
+            else:
+                kwargs["allow_agent"] = True
+                kwargs["look_for_keys"] = True
         elif self.auth_type == "key" and self.private_key:
             pkey = paramiko.RSAKey.from_private_key(io.StringIO(self.private_key))
             kwargs["pkey"] = pkey
         else:
             kwargs["password"] = self.password
+            kwargs["look_for_keys"] = False
         self.client.connect(**kwargs)
         self.sftp = self.client.open_sftp()
         self.last_active = time.time()
