@@ -37,8 +37,16 @@ class SSHConnection:
             "timeout": 10,
         }
         if self.auth_type == "key_file":
-            kwargs["allow_agent"] = True
+            ssh_dir = os.path.expanduser("~/.ssh")
+            key_files = []
+            for name in ("id_ed25519", "id_ecdsa", "id_rsa", "id_dsa"):
+                p = os.path.join(ssh_dir, name)
+                if os.path.isfile(p):
+                    key_files.append(p)
+            if key_files:
+                kwargs["key_filename"] = key_files
             kwargs["look_for_keys"] = True
+            kwargs["allow_agent"] = False
         elif self.auth_type == "key" and self.private_key:
             pkey = paramiko.RSAKey.from_private_key(io.StringIO(self.private_key))
             kwargs["pkey"] = pkey
