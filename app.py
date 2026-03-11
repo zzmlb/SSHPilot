@@ -23,7 +23,20 @@ from security import (
     rate_limiter, ADMIN_USER, ADMIN_PWD_HASH,
 )
 
+import logging as _logging
+_log = _logging.getLogger("ssh-fm")
+
 DATABASE_URL = "sqlite:///data/nodes.db"
+
+
+def _safe_err(e: Exception) -> str:
+    """Strip internal paths from error messages before returning to client."""
+    msg = str(e)
+    msg = re.sub(r"(/[^\s'\"]+/\.ssh/[^\s'\"]*)", "[key-path]", msg)
+    msg = re.sub(r"(/home/[^\s'\"]+|/root/[^\s'\"]+|/tmp/[^\s'\"]+)", "[server-path]", msg)
+    if len(msg) > 200:
+        msg = msg[:200] + "…"
+    return msg
 database = databases.Database(DATABASE_URL)
 
 SENSITIVE_FIELDS = {"password", "private_key"}
@@ -39,6 +52,14 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Cache-Control"] = "no-store"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; "
+            "font-src 'self' https://cdnjs.cloudflare.com; "
+            "script-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; "
+            "connect-src 'self'"
+        )
         return response
 
 
@@ -111,7 +132,7 @@ async def lifespan(app: FastAPI):
     await database.disconnect()
 
 
-app = FastAPI(title="SSH File Manager", lifespan=lifespan)
+app = FastAPI(title="SSH File Manager", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 app.add_middleware(SecurityMiddleware)
 app.add_middleware(AuthMiddleware)
 
@@ -348,7 +369,8 @@ async def get_conn(node_id: int):
             auth_type=r["auth_type"],
         )
     except Exception as e:
-        raise HTTPException(502, f"SSH connection failed: {e}")
+        _log.warning("SSH connect failed node=%s: %s", node_id, e)
+        raise HTTPException(502, f"SSH connection failed: {_safe_err(e)}")
 
 
 async def run_sync(fn, *args, **kwargs):
@@ -399,7 +421,7 @@ async def list_files(node_id: int, path: str = "/"):
     except PermissionError:
         raise HTTPException(403, "Permission denied")
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, _safe_err(e))
 
 
 @app.get("/api/files/{node_id}/download")
@@ -420,7 +442,7 @@ async def download_file(node_id: int, path: str = Query(...)):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, _safe_err(e))
 
 
 @app.post("/api/files/{node_id}/upload")
@@ -440,7 +462,7 @@ async def upload_file(node_id: int, path: str = Form(...), file: UploadFile = Fi
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, _safe_err(e))
 
 
 MAX_EDIT_SIZE = 2 * 1024 * 1024  # 2MB
@@ -465,7 +487,7 @@ async def read_file_content(node_id: int, path: str = Query(...)):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, _safe_err(e))
 
 
 @app.post("/api/files/{node_id}/content")
@@ -476,7 +498,7 @@ async def write_file_content(node_id: int, body: FileWriteAction):
         await run_sync(conn.write_file, path, body.content.encode("utf-8"))
         return {"ok": True, "path": path}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, _safe_err(e))
 
 
 @app.post("/api/files/{node_id}/create")
@@ -487,7 +509,7 @@ async def create_file(node_id: int, body: FileCreateAction):
         await run_sync(conn.write_file, path, body.content.encode("utf-8"))
         return {"ok": True, "path": path}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, _safe_err(e))
 
 
 @app.post("/api/files/{node_id}/mkdir")
@@ -498,7 +520,7 @@ async def mkdir(node_id: int, body: MkdirAction):
         await run_sync(conn.mkdir, path)
         return {"ok": True}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, _safe_err(e))
 
 
 @app.post("/api/files/{node_id}/rename")
@@ -514,7 +536,7 @@ async def rename_file(node_id: int, body: RenameAction):
         })
         return {"ok": True}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, _safe_err(e))
 
 
 @app.post("/api/files/{node_id}/copy")
@@ -526,7 +548,7 @@ async def copy_file(node_id: int, body: FileAction):
         await run_sync(conn.copy_file, src, dest)
         return {"ok": True}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, _safe_err(e))
 
 
 @app.post("/api/files/{node_id}/move")
@@ -542,7 +564,7 @@ async def move_file(node_id: int, body: FileAction):
         })
         return {"ok": True}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, _safe_err(e))
 
 
 @app.delete("/api/files/{node_id}")
@@ -557,7 +579,7 @@ async def delete_file(node_id: int, path: str = Query(...)):
         })
         return {"ok": True}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, _safe_err(e))
 
 
 @app.post("/api/files/{node_id}/compress")
@@ -572,7 +594,7 @@ async def compress_files(node_id: int, body: CompressAction):
         await run_sync(conn.compress, paths, archive, cwd)
         return {"ok": True}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, _safe_err(e))
 
 
 @app.post("/api/files/{node_id}/decompress")
@@ -584,7 +606,7 @@ async def decompress_file(node_id: int, body: DecompressAction):
         await run_sync(conn.decompress, path, cwd)
         return {"ok": True}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, _safe_err(e))
 
 
 # ---------- Cross-server Transfer ----------
@@ -633,7 +655,7 @@ async def transfer_file(body: TransferAction):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, _safe_err(e))
 
 
 # ---------- Undo ----------
@@ -665,7 +687,7 @@ async def undo_last(node_id: int):
             raise HTTPException(400, f"Unknown operation type: {op['type']}")
     except Exception as e:
         op_log.push(node_id, op)
-        raise HTTPException(500, f"Undo failed: {e}")
+        raise HTTPException(500, f"Undo failed: {_safe_err(e)}")
 
 
 # ---------- Trash ----------
@@ -685,7 +707,7 @@ async def restore_trash(node_id: int, body: TrashRestoreAction):
         await run_sync(conn.restore_from_trash, tp, op)
         return {"ok": True}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, _safe_err(e))
 
 
 @app.delete("/api/trash/{node_id}")
@@ -695,7 +717,7 @@ async def empty_trash(node_id: int):
         await run_sync(conn.empty_trash)
         return {"ok": True}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, _safe_err(e))
 
 
 @app.delete("/api/trash/{node_id}/item")
@@ -706,7 +728,7 @@ async def delete_trash_item(node_id: int, path: str = Query(...)):
         await run_sync(conn.delete_trash_item, path)
         return {"ok": True}
     except Exception as e:
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, _safe_err(e))
 
 
 # ---------- Monitor ----------
