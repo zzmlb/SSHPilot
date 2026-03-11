@@ -65,7 +65,7 @@ def hash_password(password: str) -> str:
 
 def verify_password(password: str, stored: str) -> bool:
     if ":" not in stored:
-        return hmac.compare_digest(password, stored)
+        return False
     salt, h = stored.split(":", 1)
     computed = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 100000)
     return hmac.compare_digest(computed.hex(), h)
@@ -74,21 +74,15 @@ def verify_password(password: str, stored: str) -> bool:
 def get_admin_credentials() -> tuple[str, str]:
     """Read admin credentials from auth.conf. Auto-generate if not exist."""
     if os.path.exists(CONFIG_FILE):
-        saved_pwd_hint = ""
         with open(CONFIG_FILE, "r") as f:
             for line in f:
                 stripped = line.strip()
-                if stripped.startswith("# Default auto-generated password:"):
-                    saved_pwd_hint = stripped.split(":", 1)[1].strip()
                 if stripped and ":" in stripped and not stripped.startswith("#"):
                     user, pwd_hash = stripped.split(":", 1)
                     print(f"\n{'='*50}")
-                    print(f"  SSH File Manager 登录信息")
+                    print(f"  SSH File Manager 已启动")
                     print(f"  用户名: {user.strip()}")
-                    if saved_pwd_hint:
-                        print(f"  密  码: {saved_pwd_hint}")
-                    else:
-                        print(f"  密  码: (见 {CONFIG_FILE})")
+                    print(f"  密  码: (首次生成时已显示，如忘记请删除 {CONFIG_FILE} 重启)")
                     print(f"{'='*50}\n")
                     return user.strip(), pwd_hash.strip()
     auto_pwd = secrets.token_urlsafe(16)
@@ -97,7 +91,6 @@ def get_admin_credentials() -> tuple[str, str]:
     with open(CONFIG_FILE, "w") as f:
         f.write(f"# SSH File Manager admin credentials\n")
         f.write(f"# Username:PasswordHash\n")
-        f.write(f"# Default auto-generated password: {auto_pwd}\n")
         f.write(f"# To change password, delete this file and restart\n")
         f.write(f"admin:{pwd_hash}\n")
     os.chmod(CONFIG_FILE, 0o600)

@@ -48,7 +48,15 @@ class SSHConnection:
             kwargs["look_for_keys"] = True
             kwargs["allow_agent"] = False
         elif self.auth_type == "key" and self.private_key:
-            pkey = paramiko.RSAKey.from_private_key(io.StringIO(self.private_key))
+            pkey = None
+            for key_cls in (paramiko.Ed25519Key, paramiko.ECDSAKey, paramiko.RSAKey, paramiko.DSSKey):
+                try:
+                    pkey = key_cls.from_private_key(io.StringIO(self.private_key))
+                    break
+                except Exception:
+                    continue
+            if pkey is None:
+                raise paramiko.SSHException("Unsupported private key format")
             kwargs["pkey"] = pkey
         else:
             kwargs["password"] = self.password

@@ -2,6 +2,7 @@
 data/.secret_key
 data/auth.conf
 data/nodes.db
+data/local_meta.json
 
 # Python
 __pycache__/
