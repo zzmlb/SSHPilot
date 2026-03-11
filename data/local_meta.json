@@ -1,8 +1,8 @@
 {
   "name": "本机",
   "country": "中国",
-  "provider": "RainYun",
-  "business": "",
-  "expire_date": "",
-  "cost": ""
+  "provider": "雨云",
+  "business": "claude编程主服务器",
+  "expire_date": "2026-03-14",
+  "cost": "270"
 }

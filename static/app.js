@@ -259,6 +259,8 @@ async function connectLocalToPanel() {
 function updateLocalCardActive() { /* handled in renderNodeList */ }
 
 /* ========== Monitor ========== */
+let _monStats = [], _monNodes = [];
+
 function toggleMonitor() {
     monitorActive = !monitorActive;
     const btn = document.getElementById("monitor-btn");
@@ -277,15 +279,23 @@ function toggleMonitor() {
     }
 }
 
+function switchMonTab(tab) {
+    document.getElementById("mtab-res").classList.toggle("active", tab === "res");
+    document.getElementById("mtab-fin").classList.toggle("active", tab === "fin");
+    document.getElementById("mon-tab-res").classList.toggle("hidden", tab !== "res");
+    document.getElementById("mon-tab-fin").classList.toggle("hidden", tab !== "fin");
+    if (tab === "fin") renderFinanceTab();
+}
+
 async function refreshMonitor() {
     try {
         const resp = await apiJson("/api/monitor");
-        const stats = resp.stats;
-        const allNodes = resp.nodes;
-        renderMonitorSummary(stats, allNodes);
-        renderMonitorGrid(stats);
-        renderExpiryCostPanel(allNodes);
-        document.getElementById("monitor-time").textContent = "更新: " + new Date().toLocaleTimeString("zh-CN");
+        _monStats = resp.stats;
+        _monNodes = resp.nodes;
+        renderMonitorSummary(_monStats, _monNodes);
+        renderMonitorGrid(_monStats);
+        if (!document.getElementById("mon-tab-fin").classList.contains("hidden")) renderFinanceTab();
+        document.getElementById("monitor-time").textContent = new Date().toLocaleTimeString("zh-CN");
     } catch (e) {
         document.getElementById("monitor-grid").innerHTML = `<div style="color:var(--danger);padding:20px">${esc(e.message)}</div>`;
     }
@@ -298,22 +308,14 @@ function renderMonitorSummary(stats, allNodes) {
     const totalMemUsed = online.reduce((s, d) => s + (d.mem_used || 0), 0);
     const totalDisk = online.reduce((s, d) => s + (d.disk_total || 0), 0);
     const totalDiskUsed = online.reduce((s, d) => s + (d.disk_used || 0), 0);
-    let totalCost = 0;
-    [...allNodes, ...(_localMeta && _localMeta.cost ? [_localMeta] : [])].forEach(n => {
-        if (n.cost) { const m = n.cost.match(/([\d.]+)/); if (m) totalCost += parseFloat(m[1]); }
-    });
-    const expiring = [...allNodes, ...(_localMeta && _localMeta.expire_date ? [_localMeta] : [])].filter(n => {
-        if (!n.expire_date) return false;
-        return Math.ceil((new Date(n.expire_date) - new Date()) / 86400000) <= 30;
-    }).length;
+    const memPct = totalMem ? Math.round(totalMemUsed / totalMem * 100) : 0;
+    const diskPct = totalDisk ? Math.round(totalDiskUsed / totalDisk * 100) : 0;
 
     document.getElementById("monitor-summary").innerHTML = `
         <div class="kpi-card kpi-blue"><div class="kpi-label">在线</div><div class="kpi-value">${online.length}<span style="font-size:12px;color:var(--text-dim)">/${allNodes.length + 1}</span></div></div>
-        <div class="kpi-card kpi-blue"><div class="kpi-label">CPU</div><div class="kpi-value">${totalCpu}<span style="font-size:12px;color:var(--text-dim)"> 核</span></div></div>
-        <div class="kpi-card kpi-purple"><div class="kpi-label">内存</div><div class="kpi-value">${fmtBytes(totalMemUsed)}</div><div class="kpi-sub">/ ${fmtBytes(totalMem)}</div></div>
-        <div class="kpi-card kpi-green"><div class="kpi-label">磁盘</div><div class="kpi-value">${fmtBytes(totalDiskUsed)}</div><div class="kpi-sub">/ ${fmtBytes(totalDisk)}</div></div>
-        <div class="kpi-card kpi-orange"><div class="kpi-label">月费合计</div><div class="kpi-value">${totalCost ? totalCost.toFixed(0) : '—'}</div></div>
-        <div class="kpi-card ${expiring?'kpi-red':'kpi-green'}"><div class="kpi-label">即将到期</div><div class="kpi-value">${expiring}</div><div class="kpi-sub">${expiring ? '≤30天' : '全部正常'}</div></div>`;
+        <div class="kpi-card kpi-blue"><div class="kpi-label">CPU 总核心</div><div class="kpi-value">${totalCpu}</div></div>
+        <div class="kpi-card kpi-purple"><div class="kpi-label">内存 ${memPct}%</div><div class="kpi-value">${fmtBytes(totalMemUsed)}</div><div class="kpi-sub">/ ${fmtBytes(totalMem)}</div></div>
+        <div class="kpi-card kpi-green"><div class="kpi-label">磁盘 ${diskPct}%</div><div class="kpi-value">${fmtBytes(totalDiskUsed)}</div><div class="kpi-sub">/ ${fmtBytes(totalDisk)}</div></div>`;
 }
 
 function renderMonitorGrid(data) {
@@ -369,43 +371,82 @@ function renderMonitorGrid(data) {
     });
 }
 
-function renderExpiryCostPanel(allNodes) {
-    const container = document.getElementById("monitor-expiry-cost");
-    const allWithMeta = [...allNodes];
-    if (_localMeta && (_localMeta.expire_date || _localMeta.cost)) {
-        allWithMeta.unshift({ id: 0, name: _localMeta.name || "本机", expire_date: _localMeta.expire_date, cost: _localMeta.cost, country: _localMeta.country, provider: _localMeta.provider });
-    }
-    const withExpiry = allWithMeta.filter(n => n.expire_date).sort((a, b) => new Date(a.expire_date) - new Date(b.expire_date));
-    const withCost = allWithMeta.filter(n => n.cost);
+function _getAllNodesMeta() {
+    const all = [..._monNodes];
+    if (_localMeta) all.unshift({ id: 0, name: _localMeta.name || "本机", expire_date: _localMeta.expire_date || "", cost: _localMeta.cost || "", country: _localMeta.country || "", provider: _localMeta.provider || "", business: _localMeta.business || "" });
+    return all;
+}
 
-    let left = '<div class="mon-panel"><div class="mon-panel-head"><i class="fas fa-calendar-alt"></i> 到期时间表</div><div class="mon-panel-body">';
+function _parseCost(s) { const m = (s || "").match(/([\d.]+)/); return m ? parseFloat(m[1]) : 0; }
+
+function renderFinanceTab() {
+    const all = _getAllNodesMeta();
+    const withCost = all.filter(n => n.cost);
+    const withExpiry = all.filter(n => n.expire_date).sort((a, b) => new Date(a.expire_date) - new Date(b.expire_date));
+    const totalCost = withCost.reduce((s, n) => s + _parseCost(n.cost), 0);
+    const expiring7 = all.filter(n => n.expire_date && Math.ceil((new Date(n.expire_date) - new Date()) / 86400000) <= 7).length;
+    const expiring30 = all.filter(n => n.expire_date && Math.ceil((new Date(n.expire_date) - new Date()) / 86400000) <= 30).length;
+    const expired = all.filter(n => n.expire_date && new Date(n.expire_date) < new Date()).length;
+
+    // KPI
+    document.getElementById("fin-summary").innerHTML = `
+        <div class="kpi-card kpi-orange"><div class="kpi-label">月费合计</div><div class="kpi-value">${totalCost ? totalCost.toFixed(0) : '—'}</div></div>
+        <div class="kpi-card kpi-orange"><div class="kpi-label">年费估算</div><div class="kpi-value">${totalCost ? (totalCost * 12).toFixed(0) : '—'}</div></div>
+        <div class="kpi-card kpi-blue"><div class="kpi-label">已设费用</div><div class="kpi-value">${withCost.length}<span style="font-size:12px;color:var(--text-dim)">/${all.length}</span></div></div>
+        <div class="kpi-card kpi-purple"><div class="kpi-label">均价/台</div><div class="kpi-value">${withCost.length ? (totalCost / withCost.length).toFixed(1) : '—'}</div></div>
+        <div class="kpi-card ${expired?'kpi-red':'kpi-green'}"><div class="kpi-label">已过期</div><div class="kpi-value">${expired}</div></div>
+        <div class="kpi-card ${expiring7?'kpi-red':expiring30?'kpi-orange':'kpi-green'}"><div class="kpi-label">≤30天到期</div><div class="kpi-value">${expiring30}</div></div>`;
+
+    // Expiry table
+    let expiryHtml = '<div class="fin-expiry-panel">';
     if (!withExpiry.length) {
-        left += '<div class="mon-empty">暂无到期数据，编辑节点可设置</div>';
+        expiryHtml += '<div class="mon-empty">暂无到期数据，编辑节点可设置</div>';
     } else {
         withExpiry.forEach(n => {
             const days = Math.ceil((new Date(n.expire_date) - new Date()) / 86400000);
             const cls = days < 7 ? "bar-danger" : days < 30 ? "bar-warn" : "bar-ok";
             const label = days < 0 ? `已过期${-days}天` : days === 0 ? "今天到期" : `剩${days}天`;
             const pct = Math.max(3, Math.min(100, (Math.max(0, days) / 365) * 100));
-            left += `<div class="ec-row"><span class="ec-name">${esc(n.name)}</span><div class="ec-bar-wrap"><div class="ec-bar ${cls}" style="width:${pct}%"></div></div><span class="ec-label ${days<=7?'text-danger':days<=30?'text-warn':''}">${label}</span><span class="ec-date">${n.expire_date}</span></div>`;
+            expiryHtml += `<div class="ec-row"><span class="ec-name">${esc(n.name)}</span><div class="ec-bar-wrap"><div class="ec-bar ${cls}" style="width:${pct}%"></div></div><span class="ec-label ${days<=7?'text-danger':days<=30?'text-warn':''}">${label}</span><span class="ec-date">${n.expire_date}</span></div>`;
         });
     }
-    left += '</div></div>';
+    expiryHtml += '</div>';
+    document.getElementById("fin-expiry").innerHTML = expiryHtml;
 
-    let right = '<div class="mon-panel"><div class="mon-panel-head"><i class="fas fa-coins"></i> 费用分布</div><div class="mon-panel-body">';
-    if (!withCost.length) {
-        right += '<div class="mon-empty">暂无费用数据，编辑节点可设置</div>';
-    } else {
-        const costData = withCost.map(n => { const m = n.cost.match(/([\d.]+)/); return { name: n.name, cost: m ? parseFloat(m[1]) : 0, label: n.cost }; }).sort((a, b) => b.cost - a.cost);
-        const maxCost = Math.max(...costData.map(c => c.cost), 1);
-        costData.forEach(c => {
-            const pct = Math.max(3, (c.cost / maxCost) * 100);
-            right += `<div class="ec-row" style="grid-template-columns:80px 1fr 72px"><span class="ec-name">${esc(c.name)}</span><div class="ec-bar-wrap"><div class="ec-bar bar-cost" style="width:${pct}%"></div></div><span class="ec-label" style="color:#b8a0ff">${esc(c.label)}</span></div>`;
-        });
-    }
-    right += '</div></div>';
+    // Multi-dimension charts
+    const colors = ['#5b8af5','#a880ff','#4caf7a','#f5a623','#e74c5e','#5bc0de','#ff6b81','#7c5bf5'];
+    let chartsHtml = '';
 
-    container.innerHTML = left + right;
+    // By node (cost distribution)
+    chartsHtml += _buildFinPanel('fas fa-server', '各节点费用', withCost.map(n => ({ label: n.name, value: _parseCost(n.cost), display: n.cost })).sort((a,b) => b.value - a.value), colors[1]);
+
+    // By provider
+    const byProvider = {};
+    withCost.forEach(n => { const k = n.provider || '未设置'; byProvider[k] = (byProvider[k] || { value: 0, count: 0 }); byProvider[k].value += _parseCost(n.cost); byProvider[k].count++; });
+    chartsHtml += _buildFinPanel('fas fa-cloud', '按厂商', Object.entries(byProvider).map(([k, v]) => ({ label: k, value: v.value, count: v.count })).sort((a,b) => b.value - a.value), colors[0]);
+
+    // By country
+    const byCountry = {};
+    withCost.forEach(n => { const k = n.country || '未设置'; byCountry[k] = (byCountry[k] || { value: 0, count: 0 }); byCountry[k].value += _parseCost(n.cost); byCountry[k].count++; });
+    chartsHtml += _buildFinPanel('fas fa-globe', '按国家/地区', Object.entries(byCountry).map(([k, v]) => ({ label: k, value: v.value, count: v.count })).sort((a,b) => b.value - a.value), colors[2]);
+
+    // By business
+    const byBiz = {};
+    withCost.forEach(n => { const k = n.business || '未设置'; byBiz[k] = (byBiz[k] || { value: 0, count: 0 }); byBiz[k].value += _parseCost(n.cost); byBiz[k].count++; });
+    chartsHtml += _buildFinPanel('fas fa-briefcase', '按业务', Object.entries(byBiz).map(([k, v]) => ({ label: k, value: v.value, count: v.count })).sort((a,b) => b.value - a.value), colors[3]);
+
+    document.getElementById("fin-charts").innerHTML = chartsHtml;
+}
+
+function _buildFinPanel(icon, title, items, color) {
+    if (!items.length) return `<div class="fin-panel"><div class="fin-panel-head"><i class="${icon}" style="color:${color}"></i> ${title}</div><div class="fin-panel-body"><div class="mon-empty">暂无数据</div></div></div>`;
+    const max = Math.max(...items.map(i => i.value), 1);
+    let rows = '';
+    items.forEach(i => {
+        const pct = Math.max(3, (i.value / max) * 100);
+        rows += `<div class="fin-row"><span class="fin-label">${esc(i.label)}</span><div class="fin-bar-wrap"><div class="fin-bar" style="width:${pct}%;background:${color}"></div></div><span class="fin-val" style="color:${color}">${i.display || i.value.toFixed(0)}</span>${i.count != null ? `<span class="fin-count">${i.count}台</span>` : ''}</div>`;
+    });
+    return `<div class="fin-panel"><div class="fin-panel-head"><i class="${icon}" style="color:${color}"></i> ${title}</div><div class="fin-panel-body">${rows}</div></div>`;
 }
 
 function fmtBytes(b) {

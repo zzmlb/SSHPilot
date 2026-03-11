@@ -118,14 +118,26 @@
             <!-- Monitor Page -->
             <div id="monitor-page" class="hidden">
                 <div class="mon-topbar">
-                    <div class="mon-topbar-left"><i class="fas fa-chart-bar"></i><span>资源监控</span></div>
+                    <div class="mon-topbar-left">
+                        <div class="mon-tabs">
+                            <button class="mon-tab active" id="mtab-res" onclick="switchMonTab('res')"><i class="fas fa-server"></i> 资源监控</button>
+                            <button class="mon-tab" id="mtab-fin" onclick="switchMonTab('fin')"><i class="fas fa-coins"></i> 费用统计</button>
+                        </div>
+                    </div>
                     <div class="mon-topbar-right"><span id="monitor-time" class="mon-time"></span><button class="btn-sm" onclick="refreshMonitor()"><i class="fas fa-sync-alt"></i> 刷新</button></div>
                 </div>
-                <div class="mon-scroll">
+                <!-- Tab: 资源监控 -->
+                <div class="mon-scroll" id="mon-tab-res">
                     <div class="mon-kpi" id="monitor-summary"></div>
-                    <div class="mon-section-title"><i class="fas fa-server"></i> 服务器状态</div>
+                    <div class="mon-section-title"><i class="fas fa-chart-bar"></i> 服务器状态</div>
                     <div class="mon-grid" id="monitor-grid"></div>
-                    <div class="mon-two-col" id="monitor-expiry-cost"></div>
+                </div>
+                <!-- Tab: 费用统计 -->
+                <div class="mon-scroll hidden" id="mon-tab-fin">
+                    <div class="mon-kpi" id="fin-summary"></div>
+                    <div class="mon-section-title"><i class="fas fa-calendar-alt"></i> 到期时间表</div>
+                    <div id="fin-expiry"></div>
+                    <div class="fin-grid" id="fin-charts"></div>
                 </div>
             </div>
 
