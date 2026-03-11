@@ -222,6 +222,153 @@ class SSHConnection:
         return "'" + s.replace("'", "'\\''") + "'"
 
 
+class LocalConnection:
+    """Local filesystem operations with same interface as SSHConnection."""
+
+    def __init__(self):
+        self.last_active = time.time()
+        self._lock = threading.Lock()
+        self._trash_dir = os.path.expanduser("~/.ssh-fm-trash")
+
+    def ensure_connected(self):
+        self.last_active = time.time()
+
+    def exec_command(self, cmd: str) -> tuple[str, str]:
+        import subprocess
+        try:
+            r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
+            return r.stdout, r.stderr
+        except subprocess.TimeoutExpired:
+            return "", "Command timed out"
+
+    def list_dir(self, path: str) -> list[dict]:
+        import shutil as _sh
+        entries = []
+        for name in os.listdir(path):
+            full = os.path.join(path, name)
+            try:
+                st = os.lstat(full)
+                entries.append({
+                    "name": name,
+                    "size": st.st_size,
+                    "mtime": st.st_mtime,
+                    "is_dir": stat.S_ISDIR(st.st_mode),
+                    "is_link": stat.S_ISLNK(st.st_mode),
+                    "permissions": oct(st.st_mode & 0o777),
+                })
+            except (PermissionError, OSError):
+                pass
+        entries.sort(key=lambda e: (not e["is_dir"], e["name"].lower()))
+        return entries
+
+    def read_file(self, path: str) -> bytes:
+        with open(path, "rb") as f:
+            return f.read()
+
+    def write_file(self, path: str, data: bytes):
+        with open(path, "wb") as f:
+            f.write(data)
+
+    def mkdir(self, path: str):
+        os.mkdir(path)
+
+    def get_stat(self, path: str):
+        return os.stat(path)
+
+    def rename(self, old: str, new: str):
+        os.rename(old, new)
+
+    def copy_file(self, src: str, dst: str):
+        import shutil
+        if os.path.isdir(src):
+            shutil.copytree(src, dst)
+        else:
+            shutil.copy2(src, dst)
+
+    def move_file(self, src: str, dst: str):
+        import shutil
+        shutil.move(src, dst)
+
+    def trash(self, path: str) -> str:
+        import shutil
+        os.makedirs(self._trash_dir, exist_ok=True)
+        ts = int(time.time() * 1000)
+        trash_path = os.path.join(self._trash_dir, f"{ts}_{os.path.basename(path)}")
+        shutil.move(path, trash_path)
+        return trash_path
+
+    def restore_from_trash(self, trash_path: str, original_path: str):
+        import shutil
+        os.makedirs(os.path.dirname(original_path), exist_ok=True)
+        shutil.move(trash_path, original_path)
+
+    def list_trash(self) -> list[dict]:
+        if not os.path.isdir(self._trash_dir):
+            return []
+        entries = self.list_dir(self._trash_dir)
+        result = []
+        for e in entries:
+            name = e["name"]
+            sep = name.find("_")
+            if sep > 0:
+                try:
+                    ts = int(name[:sep]) / 1000
+                    original_name = name[sep + 1:]
+                except ValueError:
+                    ts, original_name = e["mtime"], name
+            else:
+                ts, original_name = e["mtime"], name
+            result.append({**e, "original_name": original_name,
+                           "trash_path": os.path.join(self._trash_dir, name),
+                           "deleted_at": ts})
+        result.sort(key=lambda x: x["deleted_at"], reverse=True)
+        return result
+
+    def empty_trash(self):
+        import shutil
+        if os.path.isdir(self._trash_dir):
+            shutil.rmtree(self._trash_dir)
+        os.makedirs(self._trash_dir, exist_ok=True)
+
+    def delete_trash_item(self, trash_path: str):
+        import shutil
+        if os.path.isdir(trash_path):
+            shutil.rmtree(trash_path)
+        elif os.path.exists(trash_path):
+            os.remove(trash_path)
+
+    def compress(self, paths: list[str], archive_name: str, cwd: str):
+        quoted = " ".join(SSHConnection._quote(os.path.basename(p)) for p in paths)
+        q = SSHConnection._quote
+        if archive_name.endswith(".zip"):
+            cmd = f"cd {q(cwd)} && zip -r {q(archive_name)} {quoted}"
+        else:
+            cmd = f"cd {q(cwd)} && tar czf {q(archive_name)} {quoted}"
+        _, err = self.exec_command(cmd)
+        if err.strip() and "tar:" not in err:
+            raise RuntimeError(err.strip())
+
+    def decompress(self, path: str, cwd: str):
+        q = SSHConnection._quote
+        if path.endswith(".zip"):
+            cmd = f"cd {q(cwd)} && unzip -o {q(path)}"
+        elif path.endswith(".tar.gz") or path.endswith(".tgz"):
+            cmd = f"cd {q(cwd)} && tar xzf {q(path)}"
+        elif path.endswith(".tar"):
+            cmd = f"cd {q(cwd)} && tar xf {q(path)}"
+        else:
+            raise RuntimeError(f"Unsupported archive: {path}")
+        _, err = self.exec_command(cmd)
+        if err.strip():
+            raise RuntimeError(err.strip())
+
+    def close(self):
+        pass
+
+
+local_conn = LocalConnection()
+
+
 class OperationLog:
     """Per-node undo stack for reversible operations."""
 

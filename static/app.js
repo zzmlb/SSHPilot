@@ -7,6 +7,9 @@ let activePanel = "left";
 let showHidden = false;
 let viewMode = "list";
 let panelMode = localStorage.getItem("sfm_mode") || "";  // "", "single", "dual"
+let monitorActive = false;
+let monitorTimer = null;
+let _localInfo = null;
 const PAGE_SIZE = 10;
 
 function ap() { return P[activePanel]; }
@@ -202,6 +205,132 @@ function quickAddNode(name, host, port, user) {
     openModal("node-modal");
 }
 
+/* ========== Local Server ========== */
+async function loadLocalInfo() {
+    try {
+        _localInfo = await apiJson("/api/local/info");
+        const meta = document.getElementById("local-meta");
+        const parts = [];
+        if (_localInfo.exit_ip) parts.push(_localInfo.exit_ip);
+        if (_localInfo.cpu) parts.push(_localInfo.cpu + "核");
+        if (_localInfo.mem_total) parts.push(fmtBytes(_localInfo.mem_total));
+        if (_localInfo.disk_total) parts.push(fmtBytes(_localInfo.disk_total));
+        meta.textContent = parts.join(" · ") || _localInfo.hostname;
+    } catch (e) {
+        document.getElementById("local-meta").textContent = "加载失败";
+    }
+}
+
+async function connectLocalToPanel() {
+    const side = activePanel;
+    const p = P[side];
+    p.nodeId = 0;
+    p.nodeName = "本机";
+    p.path = "/";
+    p.page = 1;
+    document.getElementById(`${side}-node-name`).textContent = "本机";
+    try {
+        await apiJson("/api/connect/0", { method: "POST" });
+        toast("本机已连接到" + (side === "left" ? "左" : "右") + "面板", "success");
+    } catch (e) { toast("连接失败: " + e.message, "error"); return; }
+    updateLocalCardActive();
+    loadNodes();
+    refreshPanel(side);
+}
+
+function updateLocalCardActive() {
+    const card = document.getElementById("local-server-card");
+    card.classList.toggle("active", P.left.nodeId === 0 || P.right.nodeId === 0);
+}
+
+/* ========== Monitor ========== */
+function toggleMonitor() {
+    monitorActive = !monitorActive;
+    const btn = document.getElementById("monitor-btn");
+    const panel = document.getElementById("dual-panel");
+    const page = document.getElementById("monitor-page");
+    btn.classList.toggle("active", monitorActive);
+    if (monitorActive) {
+        panel.classList.add("hidden");
+        page.classList.remove("hidden");
+        refreshMonitor();
+        monitorTimer = setInterval(refreshMonitor, 8000);
+    } else {
+        panel.classList.remove("hidden");
+        page.classList.add("hidden");
+        if (monitorTimer) { clearInterval(monitorTimer); monitorTimer = null; }
+    }
+}
+
+async function refreshMonitor() {
+    try {
+        const data = await apiJson("/api/monitor");
+        renderMonitorSummary(data);
+        renderMonitorGrid(data);
+        document.getElementById("monitor-time").textContent = "更新: " + new Date().toLocaleTimeString("zh-CN");
+    } catch (e) {
+        document.getElementById("monitor-grid").innerHTML = `<div style="color:var(--danger);padding:20px">${esc(e.message)}</div>`;
+    }
+}
+
+function renderMonitorSummary(data) {
+    const active = data.filter(d => !d.error);
+    const totalCpu = active.reduce((s, d) => s + (d.cpu || 0), 0);
+    const totalMem = active.reduce((s, d) => s + (d.mem_total || 0), 0);
+    const totalDisk = active.reduce((s, d) => s + (d.disk_total || 0), 0);
+    document.getElementById("monitor-summary").innerHTML = `
+        <div class="summary-card"><div class="summary-label">服务器</div><div class="summary-value">${data.length}</div></div>
+        <div class="summary-card"><div class="summary-label">CPU 总核心</div><div class="summary-value">${totalCpu}</div></div>
+        <div class="summary-card"><div class="summary-label">总内存</div><div class="summary-value">${fmtBytes(totalMem)}</div></div>
+        <div class="summary-card"><div class="summary-label">总磁盘</div><div class="summary-value">${fmtBytes(totalDisk)}</div></div>`;
+}
+
+function renderMonitorGrid(data) {
+    const grid = document.getElementById("monitor-grid");
+    grid.innerHTML = "";
+    data.forEach(d => {
+        if (d.error) {
+            grid.innerHTML += `<div class="monitor-card error"><div class="monitor-card-header"><span class="monitor-card-name"><i class="fas fa-exclamation-triangle" style="color:var(--danger)"></i> ${esc(d.name)}</span></div><div style="color:var(--text-dim);font-size:12px">连接已断开</div></div>`;
+            return;
+        }
+        const isLocal = d.node_id === 0;
+        const memPct = d.mem_total ? Math.round(d.mem_used / d.mem_total * 100) : 0;
+        const diskPct = d.disk_total ? Math.round(d.disk_used / d.disk_total * 100) : 0;
+        const loadVal = d.load && d.load[0] ? parseFloat(d.load[0]) : 0;
+        const cpuPct = d.cpu ? Math.min(100, Math.round(loadVal / d.cpu * 100)) : 0;
+        const cpuCls = cpuPct > 80 ? "danger" : cpuPct > 50 ? "warn" : "";
+        const memCls = memPct > 80 ? "danger" : memPct > 50 ? "warn" : "mem";
+        const diskCls = diskPct > 80 ? "danger" : diskPct > 50 ? "warn" : "disk";
+        grid.innerHTML += `
+        <div class="monitor-card">
+            <div class="monitor-card-header">
+                <span class="monitor-card-name"><i class="fas fa-${isLocal?'home':'server'}"></i> ${esc(d.name)} ${isLocal?'<span class="local-tag">LOCAL</span>':''}</span>
+                <span class="monitor-card-uptime">${esc(d.uptime||"")}</span>
+            </div>
+            <div class="monitor-metric">
+                <div class="metric-header"><span class="metric-label"><i class="fas fa-microchip"></i> CPU · ${d.cpu}核</span><span class="metric-value">${cpuPct}%</span></div>
+                <div class="metric-bar"><div class="metric-fill ${cpuCls}" style="width:${cpuPct}%"></div></div>
+            </div>
+            <div class="monitor-metric">
+                <div class="metric-header"><span class="metric-label"><i class="fas fa-memory"></i> 内存</span><span class="metric-value">${fmtBytes(d.mem_used)} / ${fmtBytes(d.mem_total)}</span></div>
+                <div class="metric-bar"><div class="metric-fill ${memCls}" style="width:${memPct}%"></div></div>
+            </div>
+            <div class="monitor-metric">
+                <div class="metric-header"><span class="metric-label"><i class="fas fa-hdd"></i> 磁盘</span><span class="metric-value">${fmtBytes(d.disk_used)} / ${fmtBytes(d.disk_total)}</span></div>
+                <div class="metric-bar"><div class="metric-fill ${diskCls}" style="width:${diskPct}%"></div></div>
+            </div>
+            ${d.load && d.load.length ? `<div class="monitor-load"><span class="metric-label" style="font-size:10px"><i class="fas fa-tachometer-alt"></i> 负载</span>${d.load.map(l=>`<span class="load-chip">${l}</span>`).join("")}</div>` : ""}
+        </div>`;
+    });
+}
+
+function fmtBytes(b) {
+    if (!b || b <= 0) return "0";
+    if (b < 1073741824) return (b / 1048576).toFixed(0) + " MB";
+    if (b < 1099511627776) return (b / 1073741824).toFixed(1) + " GB";
+    return (b / 1099511627776).toFixed(2) + " TB";
+}
+
 /* ========== Panel Management ========== */
 function setActivePanel(side) {
     activePanel = side;
@@ -227,6 +356,7 @@ async function loadNodes() {
 function renderNodeList(nodes) {
     const ul = document.getElementById("node-list");
     ul.innerHTML = "";
+    updateLocalCardActive();
     nodes.forEach(n => {
         const li = document.createElement("li");
         const isLeft = P.left.nodeId === n.id, isRight = P.right.nodeId === n.id;
@@ -238,6 +368,21 @@ function renderNodeList(nodes) {
         if (n.country) tags += `<span class="node-tag tag-country">${esc(n.country)}</span>`;
         if (n.provider) tags += `<span class="node-tag tag-provider">${esc(n.provider)}</span>`;
         if (n.business) tags += `<span class="node-tag tag-business">${esc(n.business)}</span>`;
+        if (n.cost) tags += `<span class="node-tag tag-cost">${esc(n.cost)}</span>`;
+        if (n.expire_date) {
+            const days = Math.ceil((new Date(n.expire_date) - new Date()) / 86400000);
+            const cls = days < 0 ? "expire-danger" : days < 7 ? "expire-danger" : days < 30 ? "expire-warn" : "";
+            const label = days < 0 ? `已过期${-days}天` : days === 0 ? "今天到期" : `剩${days}天`;
+            tags += `<span class="node-tag tag-expire ${cls}">${label}</span>`;
+        }
+        if (n.hw) {
+            const hw = n.hw;
+            const parts = [];
+            if (hw.cpu) parts.push(hw.cpu + "核");
+            if (hw.mem_total) parts.push(fmtBytes(hw.mem_total));
+            if (hw.disk_total) parts.push(fmtBytes(hw.disk_total));
+            if (parts.length) tags += `<span class="node-tag tag-hw">${parts.join(" · ")}</span>`;
+        }
         const safeName = escAttr(escJs(n.name));
         li.innerHTML = `
             <div class="node-info" onclick="connectNodeToPanel(${n.id},'${safeName}')">
@@ -249,7 +394,7 @@ function renderNodeList(nodes) {
                 <button class="btn-icon" onclick="event.stopPropagation();editNode(${n.id})" title="编辑"><i class="fas fa-pen"></i></button>
                 <button class="btn-icon" onclick="event.stopPropagation();removeNode(${n.id})" title="删除"><i class="fas fa-trash"></i></button>
             </div>`;
-        li.title = [n.country, n.provider, n.business].filter(Boolean).join(" · ");
+        li.title = [n.country, n.provider, n.business, n.cost, n.expire_date].filter(Boolean).join(" · ");
         ul.appendChild(li);
     });
 }
@@ -266,8 +411,10 @@ async function connectNodeToPanel(nodeId, name) {
         await apiJson(`/api/connect/${nodeId}`, { method: "POST" });
         toast(`${name} 已连接到 ${side === "left" ? "左" : "右"}面板`, "success");
     } catch (e) { toast("连接失败: " + e.message, "error"); return; }
+    updateLocalCardActive();
     loadNodes();
     refreshPanel(side);
+    setTimeout(loadNodes, 2000);
 }
 
 function showAddNodeModal() {
@@ -275,7 +422,7 @@ function showAddNodeModal() {
     document.getElementById("node-form").reset();
     document.getElementById("node-edit-id").value = "";
     document.getElementById("node-port").value = "22";
-    ["node-country","node-provider","node-business","node-password","node-private-key"].forEach(id => document.getElementById(id).value = "");
+    ["node-country","node-provider","node-business","node-password","node-private-key","node-expire-date","node-cost"].forEach(id => document.getElementById(id).value = "");
     toggleAuthFields();
     openModal("node-modal");
 }
@@ -285,7 +432,7 @@ async function editNode(id) {
         const n = await apiJson(`/api/nodes/${id}`);
         document.getElementById("node-modal-title").textContent = "编辑节点";
         document.getElementById("node-edit-id").value = n.id;
-        ["name","host","port","username","auth-type","password","private-key","country","provider","business"]
+        ["name","host","port","username","auth-type","password","private-key","country","provider","business","expire-date","cost"]
             .forEach(f => { const el = document.getElementById("node-" + f); if (el) el.value = n[f.replace(/-/g,"_")] || ""; });
         toggleAuthFields();
         openModal("node-modal");
@@ -296,7 +443,7 @@ async function saveNode(e) {
     e.preventDefault();
     const editId = document.getElementById("node-edit-id").value;
     const data = {};
-    ["name","host","port","username","auth_type","password","private_key","country","provider","business"]
+    ["name","host","port","username","auth_type","password","private_key","country","provider","business","expire_date","cost"]
         .forEach(f => { const el = document.getElementById("node-" + f.replace(/_/g,"-")); data[f] = el ? (f === "port" ? parseInt(el.value) : el.value) : ""; });
     try {
         if (editId) { await apiJson(`/api/nodes/${editId}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }); toast("节点已更新", "success"); }
@@ -609,7 +756,7 @@ function getIcon(f) { if(f.is_dir) return "fas fa-folder"; if(isArchive(f.name))
 
 /* ========== Init ========== */
 document.addEventListener("DOMContentLoaded", () => {
-    loadNodes(); initUploadDrop(); initEditor(); initPanelDropZones();
+    loadNodes(); loadLocalInfo(); initUploadDrop(); initEditor(); initPanelDropZones();
     applyMode();
     setActivePanel("left");
     document.addEventListener("keydown", e => {

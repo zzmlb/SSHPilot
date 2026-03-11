@@ -17,7 +17,7 @@ from typing import Optional
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from models import metadata, nodes
-from ssh_manager import pool, op_log, SSHConnection
+from ssh_manager import pool, op_log, SSHConnection, local_conn
 from security import (
     encrypt_field, decrypt_field, verify_password,
     rate_limiter, ADMIN_USER, ADMIN_PWD_HASH,
@@ -164,6 +164,8 @@ class NodeCreate(BaseModel):
     country: str = ""
     provider: str = ""
     business: str = ""
+    expire_date: str = ""
+    cost: str = ""
 
 
 class NodeUpdate(BaseModel):
@@ -178,6 +180,8 @@ class NodeUpdate(BaseModel):
     country: Optional[str] = None
     provider: Optional[str] = None
     business: Optional[str] = None
+    expire_date: Optional[str] = None
+    cost: Optional[str] = None
 
 
 class FileAction(BaseModel):
@@ -248,6 +252,8 @@ def _validate_path(path: str) -> str:
 MAX_UPLOAD_SIZE = 500 * 1024 * 1024   # 500 MB
 MAX_TRANSFER_SIZE = 2 * 1024 * 1024 * 1024  # 2 GB
 
+_hw_cache: dict[int, dict] = {}
+
 
 def mask_node(row: dict) -> dict:
     """Strip sensitive fields before sending to client."""
@@ -263,7 +269,12 @@ def mask_node(row: dict) -> dict:
 @app.get("/api/nodes")
 async def list_nodes():
     rows = await database.fetch_all(nodes.select())
-    return [mask_node(dict(r._mapping)) for r in rows]
+    result = []
+    for r in rows:
+        n = mask_node(dict(r._mapping))
+        n["hw"] = _hw_cache.get(n["id"])
+        result.append(n)
+    return result
 
 
 @app.get("/api/nodes/{node_id}")
@@ -320,6 +331,8 @@ async def delete_node(node_id: int):
 # ---------- SSH connect helper ----------
 
 async def get_conn(node_id: int):
+    if node_id == 0:
+        return local_conn
     row = await database.fetch_one(nodes.select().where(nodes.c.id == node_id))
     if not row:
         raise HTTPException(404, "Node not found")
@@ -345,8 +358,29 @@ async def run_sync(fn, *args, **kwargs):
 @app.post("/api/connect/{node_id}")
 async def test_connect(node_id: int):
     conn = await get_conn(node_id)
+    if node_id == 0:
+        return {"status": "connected", "echo": "ok"}
     out, _ = await run_sync(conn.exec_command, "echo ok")
+    asyncio.ensure_future(_cache_hw_info(node_id, conn))
     return {"status": "connected", "echo": out.strip()}
+
+
+async def _cache_hw_info(node_id: int, conn):
+    try:
+        combined, _ = await run_sync(conn.exec_command,
+            "nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 0; "
+            "echo '___'; "
+            "free -b 2>/dev/null | awk 'NR==2{print $2}'; "
+            "echo '___'; "
+            "df -B1 / 2>/dev/null | awk 'NR==2{print $2}'"
+        )
+        parts = combined.split("___\n")
+        cpu = int(parts[0].strip().split("\n")[0]) if parts[0].strip() else 0
+        mem = int(parts[1].strip()) if len(parts) > 1 and parts[1].strip().isdigit() else 0
+        disk = int(parts[2].strip()) if len(parts) > 2 and parts[2].strip().isdigit() else 0
+        _hw_cache[node_id] = {"cpu": cpu, "mem_total": mem, "disk_total": disk}
+    except Exception:
+        pass
 
 
 # ---------- File operations ----------
@@ -671,6 +705,123 @@ async def delete_trash_item(node_id: int, path: str = Query(...)):
         return {"ok": True}
     except Exception as e:
         raise HTTPException(500, str(e))
+
+
+# ---------- Monitor ----------
+
+import shutil as _shutil
+import socket as _socket
+
+
+async def _get_local_stats() -> dict:
+    cpu = os.cpu_count() or 0
+    loads: list[str] = []
+    mem_total = mem_used = 0
+    try:
+        with open("/proc/loadavg") as f:
+            loads = f.read().strip().split()[:3]
+    except Exception:
+        pass
+    try:
+        with open("/proc/meminfo") as f:
+            info = {}
+            for line in f:
+                p = line.split()
+                if len(p) >= 2:
+                    info[p[0].rstrip(":")] = int(p[1]) * 1024
+            mem_total = info.get("MemTotal", 0)
+            mem_used = mem_total - info.get("MemAvailable", 0)
+    except Exception:
+        pass
+    try:
+        du = _shutil.disk_usage("/")
+        disk_total, disk_used = du.total, du.used
+    except Exception:
+        disk_total = disk_used = 0
+    uptime_str = ""
+    try:
+        with open("/proc/uptime") as f:
+            secs = int(float(f.read().split()[0]))
+            d, r = divmod(secs, 86400)
+            h = r // 3600
+            uptime_str = f"up {d}d {h}h"
+    except Exception:
+        pass
+    return {"cpu": cpu, "load": loads, "mem_total": mem_total, "mem_used": mem_used,
+            "disk_total": disk_total, "disk_used": disk_used, "uptime": uptime_str}
+
+
+async def _fetch_node_stats(conn) -> dict:
+    combined, _ = await run_sync(conn.exec_command,
+        "nproc 2>/dev/null || echo 0; echo '___'; "
+        "cat /proc/loadavg 2>/dev/null; echo '___'; "
+        "free -b 2>/dev/null | awk 'NR==2{print $2,$3}'; echo '___'; "
+        "df -B1 / 2>/dev/null | awk 'NR==2{print $2,$3}'; echo '___'; "
+        "uptime -p 2>/dev/null || uptime 2>/dev/null"
+    )
+    s = combined.split("___\n")
+    cpu = int(s[0].strip().split("\n")[0]) if s[0].strip().split("\n")[0].isdigit() else 0
+    loads = s[1].strip().split()[:3] if len(s) > 1 else []
+    mp = s[2].strip().split() if len(s) > 2 else []
+    mem_total = int(mp[0]) if mp and mp[0].isdigit() else 0
+    mem_used = int(mp[1]) if len(mp) > 1 and mp[1].isdigit() else 0
+    dp = s[3].strip().split() if len(s) > 3 else []
+    disk_total = int(dp[0]) if dp and dp[0].isdigit() else 0
+    disk_used = int(dp[1]) if len(dp) > 1 and dp[1].isdigit() else 0
+    uptime = s[4].strip() if len(s) > 4 else ""
+    return {"cpu": cpu, "load": loads, "mem_total": mem_total, "mem_used": mem_used,
+            "disk_total": disk_total, "disk_used": disk_used, "uptime": uptime}
+
+
+@app.get("/api/monitor")
+async def get_monitor():
+    results = []
+    local = await _get_local_stats()
+    local["node_id"] = 0
+    local["name"] = "本机"
+    results.append(local)
+
+    rows = await database.fetch_all(nodes.select())
+    node_map = {dict(r._mapping)["id"]: dict(r._mapping)["name"] for r in rows}
+    for node_id, conn in list(pool._pool.items()):
+        try:
+            st = await _fetch_node_stats(conn)
+            st["node_id"] = node_id
+            st["name"] = node_map.get(node_id, f"Node {node_id}")
+            results.append(st)
+        except Exception:
+            results.append({"node_id": node_id, "name": node_map.get(node_id, ""), "error": True})
+    return results
+
+
+@app.get("/api/local/info")
+async def get_local_info():
+    hostname = _socket.gethostname()
+    loop = asyncio.get_event_loop()
+    try:
+        r = await loop.run_in_executor(None, lambda: subprocess.run(
+            ["curl", "-s", "--connect-timeout", "3", "ifconfig.me"],
+            capture_output=True, text=True, timeout=5))
+        exit_ip = r.stdout.strip() if r.returncode == 0 else ""
+    except Exception:
+        exit_ip = ""
+    cpu = os.cpu_count() or 0
+    mem_total = 0
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    mem_total = int(line.split()[1]) * 1024
+                    break
+    except Exception:
+        pass
+    try:
+        du = _shutil.disk_usage("/")
+        disk_total = du.total
+    except Exception:
+        disk_total = 0
+    return {"hostname": hostname, "exit_ip": exit_ip, "cpu": cpu,
+            "mem_total": mem_total, "disk_total": disk_total}
 
 
 # ---------- Local SSH Info ----------

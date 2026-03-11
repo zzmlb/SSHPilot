@@ -23,6 +23,13 @@
                 <button class="stab" id="stab-sshkeys" onclick="switchSidebarTab('sshkeys')"><i class="fas fa-key"></i> SSH 密钥</button>
             </div>
             <div id="sidebar-nodes">
+                <div id="local-server-card" class="local-card" onclick="connectLocalToPanel()">
+                    <div class="local-icon"><i class="fas fa-home"></i></div>
+                    <div class="local-info">
+                        <div class="local-title">本机 <span class="node-tag tag-local">LOCAL</span></div>
+                        <div class="local-meta" id="local-meta">加载中...</div>
+                    </div>
+                </div>
                 <ul id="node-list"></ul>
             </div>
             <div id="sidebar-sshkeys" class="hidden">
@@ -59,6 +66,7 @@
             <div id="global-toolbar" class="hidden">
                 <div class="actions">
                     <button class="btn-sm btn-mode" id="mode-toggle-btn" onclick="toggleMode()"><i class="fas fa-columns"></i> <span id="mode-toggle-text">双面板</span></button>
+                    <button class="btn-sm btn-monitor" id="monitor-btn" onclick="toggleMonitor()"><i class="fas fa-chart-bar"></i> 监控</button>
                     <span class="toolbar-sep"></span>
                     <button class="btn-sm" onclick="refreshPanel(activePanel)"><i class="fas fa-sync-alt"></i> 刷新</button>
                     <button class="btn-sm" id="toggle-view-btn" onclick="toggleView()"><i class="fas fa-th"></i> 图标</button>
@@ -114,6 +122,19 @@
                 </div>
             </div>
 
+            <!-- Monitor Page -->
+            <div id="monitor-page" class="hidden">
+                <div class="monitor-header">
+                    <h3><i class="fas fa-chart-bar"></i> 服务器资源监控</h3>
+                    <div class="monitor-actions">
+                        <span id="monitor-time" class="text-dim"></span>
+                        <button class="btn-sm" onclick="refreshMonitor()"><i class="fas fa-sync-alt"></i> 刷新</button>
+                    </div>
+                </div>
+                <div class="monitor-summary" id="monitor-summary"></div>
+                <div class="monitor-grid" id="monitor-grid"></div>
+            </div>
+
             <!-- Upload Drop Overlay -->
             <div id="drop-overlay" class="hidden">
                 <div class="drop-content"><i class="fas fa-cloud-upload-alt"></i><p>拖拽本地文件上传到当前面板</p></div>
@@ -131,6 +152,7 @@
                 <div class="form-row"><div class="form-col"><label>端口</label><input type="number" id="node-port" value="22"></div><div class="form-col"><label>用户名</label><input type="text" id="node-username" required placeholder="root"></div></div>
                 <div class="form-row"><div class="form-col"><label>国家/地区</label><input type="text" id="node-country" placeholder="中国 / 美国"></div><div class="form-col"><label>厂商</label><input type="text" id="node-provider" placeholder="阿里云 / AWS"></div></div>
                 <div class="form-row"><div class="form-col" style="flex:1"><label>业务</label><input type="text" id="node-business" placeholder="Web服务 / 数据库"></div></div>
+                <div class="form-row"><div class="form-col"><label>到期时间</label><input type="date" id="node-expire-date"></div><div class="form-col"><label>费用</label><input type="text" id="node-cost" placeholder="$5/月 / ¥35/月"></div></div>
                 <label>认证方式</label>
                 <select id="node-auth-type" onchange="toggleAuthFields()"><option value="password">密码</option><option value="key_file">SSH 免密直连</option><option value="key">粘贴私钥</option></select>
                 <div id="password-field"><label>密码</label><input type="password" id="node-password" placeholder="密码"></div>

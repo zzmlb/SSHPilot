@@ -20,7 +20,16 @@ nodes = sqlalchemy.Table(
     sqlalchemy.Column("country", sqlalchemy.String(64), default=""),
     sqlalchemy.Column("provider", sqlalchemy.String(64), default=""),
     sqlalchemy.Column("business", sqlalchemy.String(128), default=""),
+    sqlalchemy.Column("expire_date", sqlalchemy.String(32), default=""),
+    sqlalchemy.Column("cost", sqlalchemy.String(64), default=""),
 )
 
 engine = sqlalchemy.create_engine("sqlite:///data/nodes.db")
 metadata.create_all(engine)
+
+with engine.connect() as _conn:
+    _existing = {r[1] for r in _conn.execute(sqlalchemy.text("PRAGMA table_info(nodes)"))}
+    for col, typ in [("expire_date", "TEXT"), ("cost", "TEXT")]:
+        if col not in _existing:
+            _conn.execute(sqlalchemy.text(f'ALTER TABLE nodes ADD COLUMN {col} {typ} DEFAULT ""'))
+    _conn.commit()
