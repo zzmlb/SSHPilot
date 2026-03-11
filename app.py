@@ -316,7 +316,9 @@ async def update_node(node_id: int, node: NodeUpdate):
     if values:
         query = nodes.update().where(nodes.c.id == node_id).values(**values)
         await database.execute(query)
-    pool.remove(node_id)
+    conn_fields = {"host", "port", "username", "auth_type", "password", "private_key", "key_file"}
+    if conn_fields & values.keys():
+        pool.remove(node_id)
     return {"ok": True}
 
 
