@@ -206,19 +206,37 @@ function quickAddNode(name, host, port, user) {
 }
 
 /* ========== Local Server ========== */
+let _localMeta = null;
+
 async function loadLocalInfo() {
     try {
-        _localInfo = await apiJson("/api/local/info");
-        const meta = document.getElementById("local-meta");
-        const parts = [];
-        if (_localInfo.exit_ip) parts.push(_localInfo.exit_ip);
-        if (_localInfo.cpu) parts.push(_localInfo.cpu + "核");
-        if (_localInfo.mem_total) parts.push(fmtBytes(_localInfo.mem_total));
-        if (_localInfo.disk_total) parts.push(fmtBytes(_localInfo.disk_total));
-        meta.textContent = parts.join(" · ") || _localInfo.hostname;
-    } catch (e) {
-        document.getElementById("local-meta").textContent = "加载失败";
-    }
+        const [info, meta] = await Promise.all([apiJson("/api/local/info"), apiJson("/api/local/meta")]);
+        _localInfo = info;
+        _localMeta = meta;
+    } catch (e) { /* ignore */ }
+}
+
+async function editLocalNode() {
+    const m = _localMeta || {};
+    document.getElementById("node-modal-title").textContent = "编辑本机节点";
+    document.getElementById("node-form").reset();
+    document.getElementById("node-edit-id").value = "local";
+    document.getElementById("node-name").value = m.name || "本机";
+    document.getElementById("node-host").value = _localInfo ? (_localInfo.exit_ip || _localInfo.hostname) : "";
+    document.getElementById("node-host").disabled = true;
+    document.getElementById("node-port").value = "22";
+    document.getElementById("node-port").disabled = true;
+    document.getElementById("node-username").value = "";
+    document.getElementById("node-username").disabled = true;
+    document.getElementById("node-auth-type").value = "key_file";
+    document.getElementById("node-auth-type").disabled = true;
+    document.getElementById("node-country").value = m.country || "";
+    document.getElementById("node-provider").value = m.provider || "";
+    document.getElementById("node-business").value = m.business || "";
+    document.getElementById("node-expire-date").value = m.expire_date || "";
+    document.getElementById("node-cost").value = m.cost || "";
+    toggleAuthFields();
+    openModal("node-modal");
 }
 
 async function connectLocalToPanel() {
@@ -274,132 +292,120 @@ async function refreshMonitor() {
 }
 
 function renderMonitorSummary(stats, allNodes) {
-    const active = stats.filter(d => !d.error);
-    const totalCpu = active.reduce((s, d) => s + (d.cpu || 0), 0);
-    const totalMem = active.reduce((s, d) => s + (d.mem_total || 0), 0);
-    const totalDisk = active.reduce((s, d) => s + (d.disk_total || 0), 0);
-
+    const online = stats.filter(d => !d.error && !d.offline);
+    const totalCpu = online.reduce((s, d) => s + (d.cpu || 0), 0);
+    const totalMem = online.reduce((s, d) => s + (d.mem_total || 0), 0);
+    const totalMemUsed = online.reduce((s, d) => s + (d.mem_used || 0), 0);
+    const totalDisk = online.reduce((s, d) => s + (d.disk_total || 0), 0);
+    const totalDiskUsed = online.reduce((s, d) => s + (d.disk_used || 0), 0);
     let totalCost = 0;
-    allNodes.forEach(n => {
-        if (n.cost) {
-            const m = n.cost.match(/([\d.]+)/);
-            if (m) totalCost += parseFloat(m[1]);
-        }
+    [...allNodes, ...(_localMeta && _localMeta.cost ? [_localMeta] : [])].forEach(n => {
+        if (n.cost) { const m = n.cost.match(/([\d.]+)/); if (m) totalCost += parseFloat(m[1]); }
     });
-    const expiring = allNodes.filter(n => {
+    const expiring = [...allNodes, ...(_localMeta && _localMeta.expire_date ? [_localMeta] : [])].filter(n => {
         if (!n.expire_date) return false;
-        const days = Math.ceil((new Date(n.expire_date) - new Date()) / 86400000);
-        return days <= 30;
+        return Math.ceil((new Date(n.expire_date) - new Date()) / 86400000) <= 30;
     }).length;
 
     document.getElementById("monitor-summary").innerHTML = `
-        <div class="summary-card"><div class="summary-label">在线服务器</div><div class="summary-value">${stats.length}</div></div>
-        <div class="summary-card"><div class="summary-label">CPU 总核心</div><div class="summary-value">${totalCpu}</div></div>
-        <div class="summary-card"><div class="summary-label">总内存</div><div class="summary-value">${fmtBytes(totalMem)}</div></div>
-        <div class="summary-card"><div class="summary-label">总磁盘</div><div class="summary-value">${fmtBytes(totalDisk)}</div></div>
-        <div class="summary-card"><div class="summary-label">总节点</div><div class="summary-value">${allNodes.length}</div></div>
-        <div class="summary-card"><div class="summary-label">月费用合计</div><div class="summary-value" style="color:var(--warning)">${totalCost ? totalCost.toFixed(0) : '-'}</div></div>
-        <div class="summary-card"><div class="summary-label">即将到期</div><div class="summary-value" style="color:${expiring?'var(--danger)':'var(--success)'}">${expiring}</div></div>`;
+        <div class="kpi-card kpi-blue"><div class="kpi-label">在线</div><div class="kpi-value">${online.length}<span style="font-size:12px;color:var(--text-dim)">/${allNodes.length + 1}</span></div></div>
+        <div class="kpi-card kpi-blue"><div class="kpi-label">CPU</div><div class="kpi-value">${totalCpu}<span style="font-size:12px;color:var(--text-dim)"> 核</span></div></div>
+        <div class="kpi-card kpi-purple"><div class="kpi-label">内存</div><div class="kpi-value">${fmtBytes(totalMemUsed)}</div><div class="kpi-sub">/ ${fmtBytes(totalMem)}</div></div>
+        <div class="kpi-card kpi-green"><div class="kpi-label">磁盘</div><div class="kpi-value">${fmtBytes(totalDiskUsed)}</div><div class="kpi-sub">/ ${fmtBytes(totalDisk)}</div></div>
+        <div class="kpi-card kpi-orange"><div class="kpi-label">月费合计</div><div class="kpi-value">${totalCost ? totalCost.toFixed(0) : '—'}</div></div>
+        <div class="kpi-card ${expiring?'kpi-red':'kpi-green'}"><div class="kpi-label">即将到期</div><div class="kpi-value">${expiring}</div><div class="kpi-sub">${expiring ? '≤30天' : '全部正常'}</div></div>`;
 }
 
 function renderMonitorGrid(data) {
     const grid = document.getElementById("monitor-grid");
     grid.innerHTML = "";
     data.forEach(d => {
-        if (d.offline) {
-            const tags = [d.country, d.provider].filter(Boolean).map(t => `<span class="load-chip">${esc(t)}</span>`).join("");
-            grid.innerHTML += `<div class="monitor-card" style="opacity:.5"><div class="monitor-card-header"><span class="monitor-card-name"><i class="fas fa-power-off" style="color:var(--text-dim)"></i> ${esc(d.name)}</span><span class="monitor-card-uptime" style="color:var(--text-dim)">离线</span></div><div style="color:var(--text-dim);font-size:12px;padding:4px 0">未连接 · 点击侧边栏节点连接后查看数据</div>${tags?`<div class="monitor-load">${tags}</div>`:''}</div>`;
-            return;
-        }
-        if (d.error) {
-            grid.innerHTML += `<div class="monitor-card error"><div class="monitor-card-header"><span class="monitor-card-name"><i class="fas fa-exclamation-triangle" style="color:var(--danger)"></i> ${esc(d.name)}</span></div><div style="color:var(--text-dim);font-size:12px">连接已断开</div></div>`;
-            return;
-        }
         const isLocal = d.node_id === 0;
+        const isOnline = !d.offline && !d.error;
+        const tags = [d.country, d.provider].filter(Boolean);
+
+        if (!isOnline) {
+            grid.innerHTML += `<div class="srv-card offline">
+                <div class="srv-header"><span class="srv-name"><span class="srv-dot off"></span> ${esc(d.name)}</span>
+                <div class="srv-tags">${tags.map(t=>`<span class="srv-tag">${esc(t)}</span>`).join("")}</div></div>
+                <div style="color:var(--text-dim);font-size:11px">${d.error ? '连接断开' : '未连接'}</div>
+                ${d.cost||d.expire_date?`<div class="srv-footer">${d.cost?`<span class="srv-footer-tag" style="color:#b8a0ff">${esc(d.cost)}</span>`:''} ${d.expire_date?`<span class="srv-footer-tag" style="color:var(--text-dim)">${d.expire_date}</span>`:''}</div>`:''}
+            </div>`;
+            return;
+        }
+
         const memPct = d.mem_total ? Math.round(d.mem_used / d.mem_total * 100) : 0;
         const diskPct = d.disk_total ? Math.round(d.disk_used / d.disk_total * 100) : 0;
         const loadVal = d.load && d.load[0] ? parseFloat(d.load[0]) : 0;
         const cpuPct = d.cpu ? Math.min(100, Math.round(loadVal / d.cpu * 100)) : 0;
-        const cpuCls = cpuPct > 80 ? "danger" : cpuPct > 50 ? "warn" : "";
-        const memCls = memPct > 80 ? "danger" : memPct > 50 ? "warn" : "mem";
-        const diskCls = diskPct > 80 ? "danger" : diskPct > 50 ? "warn" : "disk";
-        grid.innerHTML += `
-        <div class="monitor-card">
-            <div class="monitor-card-header">
-                <span class="monitor-card-name"><i class="fas fa-${isLocal?'home':'server'}"></i> ${esc(d.name)} ${isLocal?'<span class="local-tag">LOCAL</span>':''}</span>
-                <span class="monitor-card-uptime">${esc(d.uptime||"")}</span>
+        const clsFor = p => p > 80 ? "danger" : p > 50 ? "warn" : "";
+
+        grid.innerHTML += `<div class="srv-card">
+            <div class="srv-header">
+                <span class="srv-name"><span class="srv-dot on"></span> ${esc(d.name)}${isLocal?' <span class="srv-tag" style="color:var(--accent);background:rgba(91,138,245,.15)">LOCAL</span>':''}</span>
+                <span class="srv-uptime">${esc(d.uptime||'')}</span>
             </div>
-            <div class="monitor-metric">
-                <div class="metric-header"><span class="metric-label"><i class="fas fa-microchip"></i> CPU · ${d.cpu}核</span><span class="metric-value">${cpuPct}%</span></div>
-                <div class="metric-bar"><div class="metric-fill ${cpuCls}" style="width:${cpuPct}%"></div></div>
+            ${tags.length?`<div class="srv-tags" style="margin-bottom:8px">${tags.map(t=>`<span class="srv-tag">${esc(t)}</span>`).join("")}</div>`:''}
+            <div class="srv-metrics">
+                <div class="srv-metric">
+                    <span class="srv-metric-label"><i class="fas fa-microchip"></i> CPU ${d.cpu}核</span>
+                    <div class="srv-bar"><div class="srv-fill cpu ${clsFor(cpuPct)}" style="width:${cpuPct}%"></div></div>
+                    <span class="srv-metric-val">${cpuPct}%</span>
+                </div>
+                <div class="srv-metric">
+                    <span class="srv-metric-label"><i class="fas fa-memory"></i> 内存</span>
+                    <div class="srv-bar"><div class="srv-fill mem ${clsFor(memPct)}" style="width:${memPct}%"></div></div>
+                    <span class="srv-metric-val">${fmtBytes(d.mem_used)}/${fmtBytes(d.mem_total)}</span>
+                </div>
+                <div class="srv-metric">
+                    <span class="srv-metric-label"><i class="fas fa-hdd"></i> 磁盘</span>
+                    <div class="srv-bar"><div class="srv-fill disk ${clsFor(diskPct)}" style="width:${diskPct}%"></div></div>
+                    <span class="srv-metric-val">${fmtBytes(d.disk_used)}/${fmtBytes(d.disk_total)}</span>
+                </div>
             </div>
-            <div class="monitor-metric">
-                <div class="metric-header"><span class="metric-label"><i class="fas fa-memory"></i> 内存</span><span class="metric-value">${fmtBytes(d.mem_used)} / ${fmtBytes(d.mem_total)}</span></div>
-                <div class="metric-bar"><div class="metric-fill ${memCls}" style="width:${memPct}%"></div></div>
-            </div>
-            <div class="monitor-metric">
-                <div class="metric-header"><span class="metric-label"><i class="fas fa-hdd"></i> 磁盘</span><span class="metric-value">${fmtBytes(d.disk_used)} / ${fmtBytes(d.disk_total)}</span></div>
-                <div class="metric-bar"><div class="metric-fill ${diskCls}" style="width:${diskPct}%"></div></div>
-            </div>
-            ${d.load && d.load.length ? `<div class="monitor-load"><span class="metric-label" style="font-size:10px"><i class="fas fa-tachometer-alt"></i> 负载</span>${d.load.map(l=>`<span class="load-chip">${l}</span>`).join("")}</div>` : ""}
+            ${d.load&&d.load.length?`<div class="srv-load"><span class="srv-load-label">负载</span>${d.load.map(l=>`<span class="srv-load-chip">${l}</span>`).join("")}</div>`:''}
+            ${d.cost||d.expire_date?`<div class="srv-footer">${d.cost?`<span class="srv-footer-tag" style="color:#b8a0ff;background:rgba(168,130,255,.1)">${esc(d.cost)}</span>`:'<span></span>'} ${d.expire_date?(() => {const days=Math.ceil((new Date(d.expire_date)-new Date())/86400000);const c=days<7?'var(--danger)':days<30?'var(--warning)':'var(--success)';return `<span class="srv-footer-tag" style="color:${c};background:rgba(255,255,255,.05)">${days<0?'已过期'+(-days)+'天':days===0?'今天到期':'剩'+days+'天'}</span>`;})():''}</div>`:''}
         </div>`;
     });
 }
 
 function renderExpiryCostPanel(allNodes) {
     const container = document.getElementById("monitor-expiry-cost");
-    const withExpiry = allNodes.filter(n => n.expire_date).sort((a, b) => new Date(a.expire_date) - new Date(b.expire_date));
-    const withCost = allNodes.filter(n => n.cost);
+    const allWithMeta = [...allNodes];
+    if (_localMeta && (_localMeta.expire_date || _localMeta.cost)) {
+        allWithMeta.unshift({ id: 0, name: _localMeta.name || "本机", expire_date: _localMeta.expire_date, cost: _localMeta.cost, country: _localMeta.country, provider: _localMeta.provider });
+    }
+    const withExpiry = allWithMeta.filter(n => n.expire_date).sort((a, b) => new Date(a.expire_date) - new Date(b.expire_date));
+    const withCost = allWithMeta.filter(n => n.cost);
 
-    let html = '<div class="monitor-bottom-grid">';
-
-    // Expiry timeline
-    html += '<div class="monitor-card" style="flex:1;min-width:300px"><div class="monitor-card-header"><span class="monitor-card-name"><i class="fas fa-calendar-alt"></i> 到期时间表</span></div>';
+    let left = '<div class="mon-panel"><div class="mon-panel-head"><i class="fas fa-calendar-alt"></i> 到期时间表</div><div class="mon-panel-body">';
     if (!withExpiry.length) {
-        html += '<div style="color:var(--text-dim);font-size:12px;padding:10px">暂无到期数据，请在节点中设置到期时间</div>';
+        left += '<div class="mon-empty">暂无到期数据，编辑节点可设置</div>';
     } else {
-        html += '<div class="expiry-list">';
         withExpiry.forEach(n => {
             const days = Math.ceil((new Date(n.expire_date) - new Date()) / 86400000);
-            const cls = days < 0 ? "expire-bar-danger" : days < 7 ? "expire-bar-danger" : days < 30 ? "expire-bar-warn" : "expire-bar-ok";
-            const label = days < 0 ? `已过期 ${-days} 天` : days === 0 ? "今天到期" : `剩 ${days} 天`;
-            const maxDays = 365;
-            const pct = Math.max(2, Math.min(100, (Math.max(0, days) / maxDays) * 100));
-            html += `<div class="expiry-row">
-                <span class="expiry-name">${esc(n.name)}</span>
-                <div class="expiry-bar-wrap"><div class="expiry-bar ${cls}" style="width:${pct}%"></div></div>
-                <span class="expiry-label ${days <= 7 ? 'text-danger' : days <= 30 ? 'text-warn' : ''}">${label}</span>
-                <span class="expiry-date">${n.expire_date}</span>
-            </div>`;
+            const cls = days < 7 ? "bar-danger" : days < 30 ? "bar-warn" : "bar-ok";
+            const label = days < 0 ? `已过期${-days}天` : days === 0 ? "今天到期" : `剩${days}天`;
+            const pct = Math.max(3, Math.min(100, (Math.max(0, days) / 365) * 100));
+            left += `<div class="ec-row"><span class="ec-name">${esc(n.name)}</span><div class="ec-bar-wrap"><div class="ec-bar ${cls}" style="width:${pct}%"></div></div><span class="ec-label ${days<=7?'text-danger':days<=30?'text-warn':''}">${label}</span><span class="ec-date">${n.expire_date}</span></div>`;
         });
-        html += '</div>';
     }
-    html += '</div>';
+    left += '</div></div>';
 
-    // Cost breakdown
-    html += '<div class="monitor-card" style="flex:1;min-width:300px"><div class="monitor-card-header"><span class="monitor-card-name"><i class="fas fa-coins"></i> 费用分布</span></div>';
+    let right = '<div class="mon-panel"><div class="mon-panel-head"><i class="fas fa-coins"></i> 费用分布</div><div class="mon-panel-body">';
     if (!withCost.length) {
-        html += '<div style="color:var(--text-dim);font-size:12px;padding:10px">暂无费用数据，请在节点中设置费用</div>';
+        right += '<div class="mon-empty">暂无费用数据，编辑节点可设置</div>';
     } else {
-        const costData = withCost.map(n => {
-            const m = n.cost.match(/([\d.]+)/);
-            return { name: n.name, cost: m ? parseFloat(m[1]) : 0, label: n.cost, country: n.country || "", provider: n.provider || "" };
-        }).sort((a, b) => b.cost - a.cost);
+        const costData = withCost.map(n => { const m = n.cost.match(/([\d.]+)/); return { name: n.name, cost: m ? parseFloat(m[1]) : 0, label: n.cost }; }).sort((a, b) => b.cost - a.cost);
         const maxCost = Math.max(...costData.map(c => c.cost), 1);
-        html += '<div class="cost-list">';
         costData.forEach(c => {
-            const pct = Math.max(2, (c.cost / maxCost) * 100);
-            html += `<div class="cost-row">
-                <span class="cost-name">${esc(c.name)}</span>
-                <div class="cost-bar-wrap"><div class="cost-bar" style="width:${pct}%"></div></div>
-                <span class="cost-value">${esc(c.label)}</span>
-            </div>`;
+            const pct = Math.max(3, (c.cost / maxCost) * 100);
+            right += `<div class="ec-row" style="grid-template-columns:80px 1fr 72px"><span class="ec-name">${esc(c.name)}</span><div class="ec-bar-wrap"><div class="ec-bar bar-cost" style="width:${pct}%"></div></div><span class="ec-label" style="color:#b8a0ff">${esc(c.label)}</span></div>`;
         });
-        html += '</div>';
     }
-    html += '</div></div>';
+    right += '</div></div>';
 
-    container.innerHTML = html;
+    container.innerHTML = left + right;
 }
 
 function fmtBytes(b) {
@@ -442,7 +448,18 @@ function renderNodeList(nodes) {
     let localBadges = "";
     if (isLocalLeft) localBadges += '<span class="panel-badge badge-left">L</span>';
     if (isLocalRight) localBadges += '<span class="panel-badge badge-right">R</span>';
+    const lm = _localMeta || {};
     let localTags = '<span class="node-tag tag-local">LOCAL</span>';
+    if (lm.country) localTags += `<span class="node-tag tag-country">${esc(lm.country)}</span>`;
+    if (lm.provider) localTags += `<span class="node-tag tag-provider">${esc(lm.provider)}</span>`;
+    if (lm.business) localTags += `<span class="node-tag tag-business">${esc(lm.business)}</span>`;
+    if (lm.cost) localTags += `<span class="node-tag tag-cost">${esc(lm.cost)}</span>`;
+    if (lm.expire_date) {
+        const days = Math.ceil((new Date(lm.expire_date) - new Date()) / 86400000);
+        const cls = days < 7 ? "expire-danger" : days < 30 ? "expire-warn" : "";
+        const label = days < 0 ? `已过期${-days}天` : days === 0 ? "今天到期" : `剩${days}天`;
+        localTags += `<span class="node-tag tag-expire ${cls}">${label}</span>`;
+    }
     if (_localInfo) {
         const hw = [];
         if (_localInfo.cpu) hw.push(_localInfo.cpu + "核");
@@ -452,9 +469,12 @@ function renderNodeList(nodes) {
     }
     localLi.innerHTML = `
         <div class="node-info" onclick="connectLocalToPanel()">
-            <div class="node-name-row"><span class="node-name"><i class="fas fa-home" style="color:var(--accent);margin-right:4px;font-size:11px"></i>本机</span>${localBadges}</div>
+            <div class="node-name-row"><span class="node-name"><i class="fas fa-home" style="color:var(--accent);margin-right:4px;font-size:11px"></i>${esc(lm.name || '本机')}</span>${localBadges}</div>
             <span class="node-host">${_localInfo ? esc(_localInfo.exit_ip || _localInfo.hostname) : '...'}</span>
             <div class="node-tags">${localTags}</div>
+        </div>
+        <div class="node-actions">
+            <button class="btn-icon" onclick="event.stopPropagation();editLocalNode()" title="编辑"><i class="fas fa-pen"></i></button>
         </div>`;
     localLi.style.borderBottom = "1px solid var(--border)";
     localLi.style.marginBottom = "4px";
@@ -549,8 +569,20 @@ async function saveNode(e) {
     ["name","host","port","username","auth_type","password","private_key","country","provider","business","expire_date","cost"]
         .forEach(f => { const el = document.getElementById("node-" + f.replace(/_/g,"-")); data[f] = el ? (f === "port" ? parseInt(el.value) : el.value) : ""; });
     try {
-        if (editId) { await apiJson(`/api/nodes/${editId}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }); toast("节点已更新", "success"); }
-        else { await apiJson("/api/nodes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }); toast("节点已添加", "success"); }
+        if (editId === "local") {
+            await apiJson("/api/local/meta", { method: "PUT", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name: data.name, country: data.country, provider: data.provider, business: data.business, expire_date: data.expire_date, cost: data.cost }) });
+            _localMeta = { ..._localMeta, name: data.name, country: data.country, provider: data.provider, business: data.business, expire_date: data.expire_date, cost: data.cost };
+            toast("本机信息已更新", "success");
+            // Re-enable disabled fields
+            ["node-host","node-port","node-username","node-auth-type"].forEach(id => document.getElementById(id).disabled = false);
+        } else if (editId) {
+            await apiJson(`/api/nodes/${editId}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+            toast("节点已更新", "success");
+        } else {
+            await apiJson("/api/nodes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+            toast("节点已添加", "success");
+        }
         closeModal("node-modal"); loadNodes();
     } catch (e) { toast("保存失败: " + e.message, "error"); }
 }
@@ -847,7 +879,10 @@ function initUploadDrop() {
 
 /* ========== Helpers ========== */
 function openModal(id) { document.getElementById(id).classList.remove("hidden"); }
-function closeModal(id) { document.getElementById(id).classList.add("hidden"); }
+function closeModal(id) {
+    document.getElementById(id).classList.add("hidden");
+    if (id === "node-modal") ["node-host","node-port","node-username","node-auth-type"].forEach(i => document.getElementById(i).disabled = false);
+}
 function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
 function escAttr(s) { return s.replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/'/g,"&#39;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
 function escJs(s) { return s.replace(/\\/g,"\\\\").replace(/'/g,"\\'").replace(/"/g,'\\"').replace(/\n/g,"\\n").replace(/\r/g,"\\r").replace(/</g,"\\x3c").replace(/>/g,"\\x3e"); }

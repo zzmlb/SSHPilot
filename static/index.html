@@ -117,16 +117,16 @@
 
             <!-- Monitor Page -->
             <div id="monitor-page" class="hidden">
-                <div class="monitor-header">
-                    <h3><i class="fas fa-chart-bar"></i> 服务器资源监控</h3>
-                    <div class="monitor-actions">
-                        <span id="monitor-time" class="text-dim"></span>
-                        <button class="btn-sm" onclick="refreshMonitor()"><i class="fas fa-sync-alt"></i> 刷新</button>
-                    </div>
+                <div class="mon-topbar">
+                    <div class="mon-topbar-left"><i class="fas fa-chart-bar"></i><span>资源监控</span></div>
+                    <div class="mon-topbar-right"><span id="monitor-time" class="mon-time"></span><button class="btn-sm" onclick="refreshMonitor()"><i class="fas fa-sync-alt"></i> 刷新</button></div>
                 </div>
-                <div class="monitor-summary" id="monitor-summary"></div>
-                <div class="monitor-grid" id="monitor-grid"></div>
-                <div class="monitor-section" id="monitor-expiry-cost"></div>
+                <div class="mon-scroll">
+                    <div class="mon-kpi" id="monitor-summary"></div>
+                    <div class="mon-section-title"><i class="fas fa-server"></i> 服务器状态</div>
+                    <div class="mon-grid" id="monitor-grid"></div>
+                    <div class="mon-two-col" id="monitor-expiry-cost"></div>
+                </div>
             </div>
 
             <!-- Upload Drop Overlay -->
