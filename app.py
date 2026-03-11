@@ -778,7 +778,12 @@ async def get_monitor():
     results = []
     local = await _get_local_stats()
     local["node_id"] = 0
-    local["name"] = "本机"
+    lm = _read_local_meta()
+    local["name"] = lm.get("name", "本机")
+    local["country"] = lm.get("country", "")
+    local["provider"] = lm.get("provider", "")
+    local["expire_date"] = lm.get("expire_date", "")
+    local["cost"] = lm.get("cost", "")
     results.append(local)
 
     rows = await database.fetch_all(nodes.select())
@@ -827,6 +832,53 @@ async def get_monitor():
         })
 
     return {"stats": results, "nodes": all_nodes}
+
+
+LOCAL_META_FILE = "data/local_meta.json"
+
+import json as _json
+
+
+def _read_local_meta() -> dict:
+    defaults = {"name": "本机", "country": "", "provider": "", "business": "",
+                "expire_date": "", "cost": ""}
+    try:
+        with open(LOCAL_META_FILE, "r") as f:
+            d = _json.load(f)
+            defaults.update(d)
+    except (FileNotFoundError, _json.JSONDecodeError):
+        pass
+    return defaults
+
+
+def _write_local_meta(data: dict):
+    os.makedirs("data", exist_ok=True)
+    with open(LOCAL_META_FILE, "w") as f:
+        _json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+@app.get("/api/local/meta")
+async def get_local_meta():
+    return _read_local_meta()
+
+
+class LocalMetaUpdate(BaseModel):
+    name: Optional[str] = None
+    country: Optional[str] = None
+    provider: Optional[str] = None
+    business: Optional[str] = None
+    expire_date: Optional[str] = None
+    cost: Optional[str] = None
+
+
+@app.put("/api/local/meta")
+async def update_local_meta(body: LocalMetaUpdate):
+    meta = _read_local_meta()
+    for k, v in body.model_dump().items():
+        if v is not None:
+            meta[k] = v
+    _write_local_meta(meta)
+    return {"ok": True}
 
 
 @app.get("/api/local/info")
