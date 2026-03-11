@@ -284,6 +284,26 @@ body { font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto San
 .monitor-load { display:flex; gap:8px; margin-top:8px; }
 .load-chip { font-size:10px; padding:2px 8px; border-radius:4px; background:var(--bg-hover); color:var(--text-dim); font-family:"SF Mono",Monaco,Consolas,monospace; }
 
+/* ===== Monitor Bottom Section ===== */
+.monitor-section { margin-top:20px; }
+.monitor-bottom-grid { display:flex; gap:14px; flex-wrap:wrap; }
+
+.expiry-list, .cost-list { padding:4px 0; }
+.expiry-row, .cost-row { display:flex; align-items:center; gap:8px; padding:5px 4px; font-size:12px; border-bottom:1px solid var(--border); }
+.expiry-row:last-child, .cost-row:last-child { border-bottom:none; }
+.expiry-name, .cost-name { width:90px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex-shrink:0; }
+.expiry-bar-wrap, .cost-bar-wrap { flex:1; height:8px; background:var(--bg-hover); border-radius:4px; overflow:hidden; min-width:60px; }
+.expiry-bar { height:100%; border-radius:4px; transition:width .4s; }
+.expiry-bar-ok { background:var(--success); }
+.expiry-bar-warn { background:var(--warning); }
+.expiry-bar-danger { background:var(--danger); }
+.cost-bar { height:100%; border-radius:4px; background:linear-gradient(90deg,#a880ff,#5b8af5); transition:width .4s; }
+.expiry-label { font-size:11px; font-weight:600; white-space:nowrap; min-width:70px; text-align:right; }
+.expiry-date { font-size:10px; color:var(--text-dim); font-family:"SF Mono",Monaco,Consolas,monospace; white-space:nowrap; }
+.cost-value { font-size:11px; font-weight:600; white-space:nowrap; min-width:70px; text-align:right; color:#b8a0ff; }
+.text-danger { color:var(--danger) !important; }
+.text-warn { color:var(--warning) !important; }
+
 /* ===== Scrollbar & Checkbox ===== */
 ::-webkit-scrollbar { width:5px; height:5px; }
 ::-webkit-scrollbar-track { background:transparent; }

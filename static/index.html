@@ -23,13 +23,6 @@
                 <button class="stab" id="stab-sshkeys" onclick="switchSidebarTab('sshkeys')"><i class="fas fa-key"></i> SSH 密钥</button>
             </div>
             <div id="sidebar-nodes">
-                <div id="local-server-card" class="local-card" onclick="connectLocalToPanel()">
-                    <div class="local-icon"><i class="fas fa-home"></i></div>
-                    <div class="local-info">
-                        <div class="local-title">本机 <span class="node-tag tag-local">LOCAL</span></div>
-                        <div class="local-meta" id="local-meta">加载中...</div>
-                    </div>
-                </div>
                 <ul id="node-list"></ul>
             </div>
             <div id="sidebar-sshkeys" class="hidden">
@@ -133,6 +126,7 @@
                 </div>
                 <div class="monitor-summary" id="monitor-summary"></div>
                 <div class="monitor-grid" id="monitor-grid"></div>
+                <div class="monitor-section" id="monitor-expiry-cost"></div>
             </div>
 
             <!-- Upload Drop Overlay -->

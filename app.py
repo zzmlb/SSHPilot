@@ -782,16 +782,51 @@ async def get_monitor():
     results.append(local)
 
     rows = await database.fetch_all(nodes.select())
-    node_map = {dict(r._mapping)["id"]: dict(r._mapping)["name"] for r in rows}
+    node_info = {}
+    for r in rows:
+        d = dict(r._mapping)
+        node_info[d["id"]] = d
+
+    connected_ids = set()
     for node_id, conn in list(pool._pool.items()):
+        connected_ids.add(node_id)
+        info = node_info.get(node_id, {})
         try:
             st = await _fetch_node_stats(conn)
             st["node_id"] = node_id
-            st["name"] = node_map.get(node_id, f"Node {node_id}")
+            st["name"] = info.get("name", f"Node {node_id}")
+            st["expire_date"] = info.get("expire_date", "")
+            st["cost"] = info.get("cost", "")
+            st["country"] = info.get("country", "")
+            st["provider"] = info.get("provider", "")
             results.append(st)
         except Exception:
-            results.append({"node_id": node_id, "name": node_map.get(node_id, ""), "error": True})
-    return results
+            results.append({"node_id": node_id, "name": info.get("name", ""),
+                            "expire_date": info.get("expire_date", ""),
+                            "cost": info.get("cost", ""), "error": True})
+
+    for nid, info in node_info.items():
+        if nid not in connected_ids:
+            results.append({
+                "node_id": nid, "name": info.get("name", ""),
+                "expire_date": info.get("expire_date", ""),
+                "cost": info.get("cost", ""),
+                "country": info.get("country", ""),
+                "provider": info.get("provider", ""),
+                "offline": True,
+            })
+
+    all_nodes = []
+    for d in node_info.values():
+        all_nodes.append({
+            "id": d["id"], "name": d["name"],
+            "expire_date": d.get("expire_date", ""),
+            "cost": d.get("cost", ""),
+            "country": d.get("country", ""),
+            "provider": d.get("provider", ""),
+        })
+
+    return {"stats": results, "nodes": all_nodes}
 
 
 @app.get("/api/local/info")

@@ -238,10 +238,7 @@ async function connectLocalToPanel() {
     refreshPanel(side);
 }
 
-function updateLocalCardActive() {
-    const card = document.getElementById("local-server-card");
-    card.classList.toggle("active", P.left.nodeId === 0 || P.right.nodeId === 0);
-}
+function updateLocalCardActive() { /* handled in renderNodeList */ }
 
 /* ========== Monitor ========== */
 function toggleMonitor() {
@@ -264,31 +261,56 @@ function toggleMonitor() {
 
 async function refreshMonitor() {
     try {
-        const data = await apiJson("/api/monitor");
-        renderMonitorSummary(data);
-        renderMonitorGrid(data);
+        const resp = await apiJson("/api/monitor");
+        const stats = resp.stats;
+        const allNodes = resp.nodes;
+        renderMonitorSummary(stats, allNodes);
+        renderMonitorGrid(stats);
+        renderExpiryCostPanel(allNodes);
         document.getElementById("monitor-time").textContent = "更新: " + new Date().toLocaleTimeString("zh-CN");
     } catch (e) {
         document.getElementById("monitor-grid").innerHTML = `<div style="color:var(--danger);padding:20px">${esc(e.message)}</div>`;
     }
 }
 
-function renderMonitorSummary(data) {
-    const active = data.filter(d => !d.error);
+function renderMonitorSummary(stats, allNodes) {
+    const active = stats.filter(d => !d.error);
     const totalCpu = active.reduce((s, d) => s + (d.cpu || 0), 0);
     const totalMem = active.reduce((s, d) => s + (d.mem_total || 0), 0);
     const totalDisk = active.reduce((s, d) => s + (d.disk_total || 0), 0);
+
+    let totalCost = 0;
+    allNodes.forEach(n => {
+        if (n.cost) {
+            const m = n.cost.match(/([\d.]+)/);
+            if (m) totalCost += parseFloat(m[1]);
+        }
+    });
+    const expiring = allNodes.filter(n => {
+        if (!n.expire_date) return false;
+        const days = Math.ceil((new Date(n.expire_date) - new Date()) / 86400000);
+        return days <= 30;
+    }).length;
+
     document.getElementById("monitor-summary").innerHTML = `
-        <div class="summary-card"><div class="summary-label">服务器</div><div class="summary-value">${data.length}</div></div>
+        <div class="summary-card"><div class="summary-label">在线服务器</div><div class="summary-value">${stats.length}</div></div>
         <div class="summary-card"><div class="summary-label">CPU 总核心</div><div class="summary-value">${totalCpu}</div></div>
         <div class="summary-card"><div class="summary-label">总内存</div><div class="summary-value">${fmtBytes(totalMem)}</div></div>
-        <div class="summary-card"><div class="summary-label">总磁盘</div><div class="summary-value">${fmtBytes(totalDisk)}</div></div>`;
+        <div class="summary-card"><div class="summary-label">总磁盘</div><div class="summary-value">${fmtBytes(totalDisk)}</div></div>
+        <div class="summary-card"><div class="summary-label">总节点</div><div class="summary-value">${allNodes.length}</div></div>
+        <div class="summary-card"><div class="summary-label">月费用合计</div><div class="summary-value" style="color:var(--warning)">${totalCost ? totalCost.toFixed(0) : '-'}</div></div>
+        <div class="summary-card"><div class="summary-label">即将到期</div><div class="summary-value" style="color:${expiring?'var(--danger)':'var(--success)'}">${expiring}</div></div>`;
 }
 
 function renderMonitorGrid(data) {
     const grid = document.getElementById("monitor-grid");
     grid.innerHTML = "";
     data.forEach(d => {
+        if (d.offline) {
+            const tags = [d.country, d.provider].filter(Boolean).map(t => `<span class="load-chip">${esc(t)}</span>`).join("");
+            grid.innerHTML += `<div class="monitor-card" style="opacity:.5"><div class="monitor-card-header"><span class="monitor-card-name"><i class="fas fa-power-off" style="color:var(--text-dim)"></i> ${esc(d.name)}</span><span class="monitor-card-uptime" style="color:var(--text-dim)">离线</span></div><div style="color:var(--text-dim);font-size:12px;padding:4px 0">未连接 · 点击侧边栏节点连接后查看数据</div>${tags?`<div class="monitor-load">${tags}</div>`:''}</div>`;
+            return;
+        }
         if (d.error) {
             grid.innerHTML += `<div class="monitor-card error"><div class="monitor-card-header"><span class="monitor-card-name"><i class="fas fa-exclamation-triangle" style="color:var(--danger)"></i> ${esc(d.name)}</span></div><div style="color:var(--text-dim);font-size:12px">连接已断开</div></div>`;
             return;
@@ -324,6 +346,62 @@ function renderMonitorGrid(data) {
     });
 }
 
+function renderExpiryCostPanel(allNodes) {
+    const container = document.getElementById("monitor-expiry-cost");
+    const withExpiry = allNodes.filter(n => n.expire_date).sort((a, b) => new Date(a.expire_date) - new Date(b.expire_date));
+    const withCost = allNodes.filter(n => n.cost);
+
+    let html = '<div class="monitor-bottom-grid">';
+
+    // Expiry timeline
+    html += '<div class="monitor-card" style="flex:1;min-width:300px"><div class="monitor-card-header"><span class="monitor-card-name"><i class="fas fa-calendar-alt"></i> 到期时间表</span></div>';
+    if (!withExpiry.length) {
+        html += '<div style="color:var(--text-dim);font-size:12px;padding:10px">暂无到期数据，请在节点中设置到期时间</div>';
+    } else {
+        html += '<div class="expiry-list">';
+        withExpiry.forEach(n => {
+            const days = Math.ceil((new Date(n.expire_date) - new Date()) / 86400000);
+            const cls = days < 0 ? "expire-bar-danger" : days < 7 ? "expire-bar-danger" : days < 30 ? "expire-bar-warn" : "expire-bar-ok";
+            const label = days < 0 ? `已过期 ${-days} 天` : days === 0 ? "今天到期" : `剩 ${days} 天`;
+            const maxDays = 365;
+            const pct = Math.max(2, Math.min(100, (Math.max(0, days) / maxDays) * 100));
+            html += `<div class="expiry-row">
+                <span class="expiry-name">${esc(n.name)}</span>
+                <div class="expiry-bar-wrap"><div class="expiry-bar ${cls}" style="width:${pct}%"></div></div>
+                <span class="expiry-label ${days <= 7 ? 'text-danger' : days <= 30 ? 'text-warn' : ''}">${label}</span>
+                <span class="expiry-date">${n.expire_date}</span>
+            </div>`;
+        });
+        html += '</div>';
+    }
+    html += '</div>';
+
+    // Cost breakdown
+    html += '<div class="monitor-card" style="flex:1;min-width:300px"><div class="monitor-card-header"><span class="monitor-card-name"><i class="fas fa-coins"></i> 费用分布</span></div>';
+    if (!withCost.length) {
+        html += '<div style="color:var(--text-dim);font-size:12px;padding:10px">暂无费用数据，请在节点中设置费用</div>';
+    } else {
+        const costData = withCost.map(n => {
+            const m = n.cost.match(/([\d.]+)/);
+            return { name: n.name, cost: m ? parseFloat(m[1]) : 0, label: n.cost, country: n.country || "", provider: n.provider || "" };
+        }).sort((a, b) => b.cost - a.cost);
+        const maxCost = Math.max(...costData.map(c => c.cost), 1);
+        html += '<div class="cost-list">';
+        costData.forEach(c => {
+            const pct = Math.max(2, (c.cost / maxCost) * 100);
+            html += `<div class="cost-row">
+                <span class="cost-name">${esc(c.name)}</span>
+                <div class="cost-bar-wrap"><div class="cost-bar" style="width:${pct}%"></div></div>
+                <span class="cost-value">${esc(c.label)}</span>
+            </div>`;
+        });
+        html += '</div>';
+    }
+    html += '</div></div>';
+
+    container.innerHTML = html;
+}
+
 function fmtBytes(b) {
     if (!b || b <= 0) return "0";
     if (b < 1073741824) return (b / 1048576).toFixed(0) + " MB";
@@ -356,7 +434,32 @@ async function loadNodes() {
 function renderNodeList(nodes) {
     const ul = document.getElementById("node-list");
     ul.innerHTML = "";
-    updateLocalCardActive();
+
+    // Local server entry
+    const localLi = document.createElement("li");
+    const isLocalLeft = P.left.nodeId === 0, isLocalRight = P.right.nodeId === 0;
+    if (isLocalLeft || isLocalRight) localLi.classList.add("active");
+    let localBadges = "";
+    if (isLocalLeft) localBadges += '<span class="panel-badge badge-left">L</span>';
+    if (isLocalRight) localBadges += '<span class="panel-badge badge-right">R</span>';
+    let localTags = '<span class="node-tag tag-local">LOCAL</span>';
+    if (_localInfo) {
+        const hw = [];
+        if (_localInfo.cpu) hw.push(_localInfo.cpu + "核");
+        if (_localInfo.mem_total) hw.push(fmtBytes(_localInfo.mem_total));
+        if (_localInfo.disk_total) hw.push(fmtBytes(_localInfo.disk_total));
+        if (hw.length) localTags += `<span class="node-tag tag-hw">${hw.join(" · ")}</span>`;
+    }
+    localLi.innerHTML = `
+        <div class="node-info" onclick="connectLocalToPanel()">
+            <div class="node-name-row"><span class="node-name"><i class="fas fa-home" style="color:var(--accent);margin-right:4px;font-size:11px"></i>本机</span>${localBadges}</div>
+            <span class="node-host">${_localInfo ? esc(_localInfo.exit_ip || _localInfo.hostname) : '...'}</span>
+            <div class="node-tags">${localTags}</div>
+        </div>`;
+    localLi.style.borderBottom = "1px solid var(--border)";
+    localLi.style.marginBottom = "4px";
+    ul.appendChild(localLi);
+
     nodes.forEach(n => {
         const li = document.createElement("li");
         const isLeft = P.left.nodeId === n.id, isRight = P.right.nodeId === n.id;
@@ -470,7 +573,7 @@ function toggleAuthFields() {
 /* ========== Panel File Browsing ========== */
 async function refreshPanel(side) {
     const p = P[side];
-    if (!p.nodeId) return;
+    if (p.nodeId == null) return;
     document.getElementById(`${side}-path-input`).value = p.path;
     try {
         const data = await apiJson(`/api/files/${p.nodeId}?path=${encodeURIComponent(p.path)}`);
@@ -564,8 +667,8 @@ function renderPanelPagination(side, total, totalPages) {
 function panelNavigateTo(side, path) { P[side].path = path || "/"; P[side].page = 1; refreshPanel(side); setActivePanel(side); }
 function panelGoUp(side) { const p = P[side]; if (p.path === "/") return; const parts = p.path.split("/").filter(Boolean); parts.pop(); p.path = "/" + parts.join("/"); p.page = 1; refreshPanel(side); }
 function panelGoToPage(side, page) { P[side].page = page; renderPanelFiles(side); }
-function toggleHidden() { showHidden = !showHidden; ["left","right"].forEach(s => { if (P[s].nodeId) renderPanelFiles(s); }); updateToolbarState(); }
-function toggleView() { viewMode = viewMode === "list" ? "grid" : "list"; ["left","right"].forEach(s => { if (P[s].nodeId) renderPanelFiles(s); }); updateToolbarState(); }
+function toggleHidden() { showHidden = !showHidden; ["left","right"].forEach(s => { if (P[s].nodeId != null) renderPanelFiles(s); }); updateToolbarState(); }
+function toggleView() { viewMode = viewMode === "list" ? "grid" : "list"; ["left","right"].forEach(s => { if (P[s].nodeId != null) renderPanelFiles(s); }); updateToolbarState(); }
 function toggleSelectAll(side, checked) { document.querySelectorAll(`.file-check[data-side="${side}"]`).forEach(c => c.checked = checked); }
 function getCheckedForPanel(side) { return [...document.querySelectorAll(`.file-check[data-side="${side}"]:checked`)].map(c => c.dataset.path); }
 
@@ -577,7 +680,7 @@ function onFileDragStart(e, side, path, name, isDir) {
     e.dataTransfer.setData("text/plain", name);
     e.dataTransfer.effectAllowed = "copy";
     const other = otherSide(side);
-    if (P[other].nodeId) document.getElementById(`${other}-drop-zone`).classList.remove("hidden");
+    if (P[other].nodeId != null) document.getElementById(`${other}-drop-zone`).classList.remove("hidden");
 }
 
 function initPanelDropZones() {
@@ -595,7 +698,7 @@ function initPanelDropZones() {
             e.preventDefault();
             zone.classList.add("hidden");
             if (!dragData || dragData.side === side) { dragData = null; return; }
-            if (!P[side].nodeId) { toast("目标面板未连接服务器", "error"); dragData = null; return; }
+            if (P[side].nodeId == null) { toast("目标面板未连接服务器", "error"); dragData = null; return; }
             await doTransfer(dragData.nodeId, dragData.path, dragData.isDir, P[side].nodeId, P[side].path);
             dragData = null;
             refreshPanel(side);
@@ -614,7 +717,7 @@ function initPanelDropZones() {
 
 async function transferToOther(side, path, isDir) {
     const other = otherSide(side);
-    if (!P[other].nodeId) { toast("请先在对面面板连接一个服务器", "info"); return; }
+    if (P[other].nodeId == null) { toast("请先在对面面板连接一个服务器", "info"); return; }
     if (P[side].nodeId === P[other].nodeId) {
         const dest = P[other].path;
         const conn = P[side].nodeId;
@@ -656,7 +759,7 @@ async function deleteSingle(side, path) {
 
 async function deleteSelected() {
     const side = activePanel, p = ap();
-    if (!p.nodeId) return;
+    if (p.nodeId == null) return;
     const checked = getCheckedForPanel(side);
     if (!checked.length) return toast("请先选择文件", "info");
     if (!confirm(`删除 ${checked.length} 个文件？（移入回收站）`)) return;
@@ -664,21 +767,21 @@ async function deleteSelected() {
     toast("已移入回收站", "success"); refreshPanel(side);
 }
 
-function showMkdirModal() { if (!ap().nodeId) return toast("请先连接服务器","info"); document.getElementById("mkdir-name").value = ""; openModal("mkdir-modal"); }
+function showMkdirModal() { if (ap().nodeId == null) return toast("请先连接服务器","info"); document.getElementById("mkdir-name").value = ""; openModal("mkdir-modal"); }
 async function doMkdir(e) { e.preventDefault(); const p = ap(), name = document.getElementById("mkdir-name").value, full = p.path === "/" ? `/${name}` : `${p.path}/${name}`; try { await apiJson(`/api/files/${p.nodeId}/mkdir`, { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({path:full}) }); toast("已创建","success"); closeModal("mkdir-modal"); refreshPanel(activePanel); } catch(e){ toast("失败: "+e.message,"error"); } }
 
-function showCreateFileModal() { if (!ap().nodeId) return toast("请先连接服务器","info"); document.getElementById("createfile-name").value = ""; openModal("createfile-modal"); }
+function showCreateFileModal() { if (ap().nodeId == null) return toast("请先连接服务器","info"); document.getElementById("createfile-name").value = ""; openModal("createfile-modal"); }
 async function doCreateFile(e) { e.preventDefault(); const p = ap(), name = document.getElementById("createfile-name").value, full = p.path === "/" ? `/${name}` : `${p.path}/${name}`; try { await apiJson(`/api/files/${p.nodeId}/create`, { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({path:full,content:""}) }); toast("已创建","success"); closeModal("createfile-modal"); refreshPanel(activePanel); } catch(e){ toast("失败: "+e.message,"error"); } }
 
 function showRenameModal(side, path, name) { setActivePanel(side); document.getElementById("rename-old").value = path; document.getElementById("rename-new").value = name; openModal("rename-modal"); }
 async function doRename(e) { e.preventDefault(); const p = ap(), old = document.getElementById("rename-old").value, parts = old.split("/"); parts[parts.length-1] = document.getElementById("rename-new").value; try { await apiJson(`/api/files/${p.nodeId}/rename`, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({old_path:old,new_path:parts.join("/")}) }); toast("已重命名","success"); closeModal("rename-modal"); refreshPanel(activePanel); } catch(e){ toast("失败: "+e.message,"error"); } }
 
-function showCompressModal() { if (!ap().nodeId) return; const c = getCheckedForPanel(activePanel); if (!c.length) return toast("请先选择文件","info"); document.getElementById("compress-name").value = "archive.tar.gz"; openModal("compress-modal"); }
+function showCompressModal() { if (ap().nodeId == null) return; const c = getCheckedForPanel(activePanel); if (!c.length) return toast("请先选择文件","info"); document.getElementById("compress-name").value = "archive.tar.gz"; openModal("compress-modal"); }
 async function doCompress(e) { e.preventDefault(); const p = ap(), c = getCheckedForPanel(activePanel), name = document.getElementById("compress-name").value; try { await apiJson(`/api/files/${p.nodeId}/compress`, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({paths:c,archive_name:name,cwd:p.path}) }); toast("压缩完成","success"); closeModal("compress-modal"); refreshPanel(activePanel); } catch(e){ toast("失败: "+e.message,"error"); } }
 
 async function undoLast() {
     const p = ap();
-    if (!p.nodeId) return toast("请先连接服务器", "info");
+    if (p.nodeId == null) return toast("请先连接服务器", "info");
     try {
         const stack = await apiJson(`/api/undo/${p.nodeId}`);
         if (!stack.last) return toast("没有可撤销的操作", "info");
@@ -690,14 +793,14 @@ async function undoLast() {
         const r = await apiJson(`/api/undo/${p.nodeId}`, { method: "POST" });
         toast(`已撤销: ${r.restored}`, "success");
         refreshPanel(activePanel);
-        if (panelMode === "dual" && P[otherSide(activePanel)].nodeId) refreshPanel(otherSide(activePanel));
+        if (panelMode === "dual" && P[otherSide(activePanel)].nodeId != null) refreshPanel(otherSide(activePanel));
     } catch (e) {
         const msg = e.message.includes("No operation") ? "没有可撤销的操作" : "撤销失败: " + e.message;
         toast(msg, e.message.includes("No operation") ? "info" : "error");
     }
 }
 
-async function showTrashPanel() { const p = ap(); if (!p.nodeId) return; openModal("trash-modal"); const c = document.getElementById("trash-list"); c.innerHTML = '<div style="padding:20px;text-align:center"><i class="fas fa-spinner fa-spin"></i></div>'; try { const items = await apiJson(`/api/trash/${p.nodeId}`); if (!items.length) { c.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-dim)">回收站为空</div>'; return; } let h = '<table class="trash-table"><thead><tr><th>文件名</th><th>大小</th><th>删除时间</th><th>操作</th></tr></thead><tbody>'; items.forEach(i => { h += `<tr><td>${esc(i.original_name)}</td><td>${i.is_dir?"-":formatSize(i.size)}</td><td>${formatTime(i.deleted_at)}</td><td class="trash-actions"><button class="btn-sm" onclick="restoreTrashItem('${escJs(i.trash_path)}','${escJs(i.original_name)}')"><i class="fas fa-undo"></i></button><button class="btn-sm btn-danger" onclick="deleteTrashItem('${escJs(i.trash_path)}')"><i class="fas fa-times"></i></button></td></tr>`; }); h += '</tbody></table>'; c.innerHTML = h; } catch(e){ c.innerHTML = `<div style="color:var(--danger);padding:20px">${esc(e.message)}</div>`; } }
+async function showTrashPanel() { const p = ap(); if (p.nodeId == null) return; openModal("trash-modal"); const c = document.getElementById("trash-list"); c.innerHTML = '<div style="padding:20px;text-align:center"><i class="fas fa-spinner fa-spin"></i></div>'; try { const items = await apiJson(`/api/trash/${p.nodeId}`); if (!items.length) { c.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-dim)">回收站为空</div>'; return; } let h = '<table class="trash-table"><thead><tr><th>文件名</th><th>大小</th><th>删除时间</th><th>操作</th></tr></thead><tbody>'; items.forEach(i => { h += `<tr><td>${esc(i.original_name)}</td><td>${i.is_dir?"-":formatSize(i.size)}</td><td>${formatTime(i.deleted_at)}</td><td class="trash-actions"><button class="btn-sm" onclick="restoreTrashItem('${escJs(i.trash_path)}','${escJs(i.original_name)}')"><i class="fas fa-undo"></i></button><button class="btn-sm btn-danger" onclick="deleteTrashItem('${escJs(i.trash_path)}')"><i class="fas fa-times"></i></button></td></tr>`; }); h += '</tbody></table>'; c.innerHTML = h; } catch(e){ c.innerHTML = `<div style="color:var(--danger);padding:20px">${esc(e.message)}</div>`; } }
 async function restoreTrashItem(tp, name) { const dest = prompt("恢复到：", ap().path+"/"+name); if (!dest) return; try { await apiJson(`/api/trash/${ap().nodeId}/restore`, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({trash_path:tp,original_path:dest})}); toast("已恢复","success"); showTrashPanel(); refreshPanel(activePanel); } catch(e){ toast("失败: "+e.message,"error"); } }
 async function deleteTrashItem(tp) { if (!confirm("永久删除？")) return; try { await apiJson(`/api/trash/${ap().nodeId}/item?path=${encodeURIComponent(tp)}`,{method:"DELETE"}); toast("已删除","success"); showTrashPanel(); } catch(e){ toast("失败: "+e.message,"error"); } }
 async function emptyTrash() { if (!confirm("清空回收站？")) return; try { await apiJson(`/api/trash/${ap().nodeId}`,{method:"DELETE"}); toast("已清空","success"); showTrashPanel(); } catch(e){ toast("失败: "+e.message,"error"); } }
@@ -736,10 +839,10 @@ function initEditor() {
 function initUploadDrop() {
     const main = document.getElementById("main"), overlay = document.getElementById("drop-overlay");
     let dc = 0;
-    main.addEventListener("dragenter", e => { if (dragData) return; e.preventDefault(); dc++; if (ap().nodeId) overlay.classList.remove("hidden"); });
+    main.addEventListener("dragenter", e => { if (dragData) return; e.preventDefault(); dc++; if (ap().nodeId != null) overlay.classList.remove("hidden"); });
     main.addEventListener("dragleave", e => { if (dragData) return; e.preventDefault(); dc--; if (dc<=0){overlay.classList.add("hidden");dc=0;} });
     main.addEventListener("dragover", e => { if (dragData) return; e.preventDefault(); });
-    main.addEventListener("drop", async e => { if (dragData) return; e.preventDefault(); dc=0; overlay.classList.add("hidden"); const p = ap(); if (!p.nodeId) return; const files = e.dataTransfer.files; if (!files.length) return; for (const f of files) { const fd = new FormData(); fd.append("path",p.path); fd.append("file",f); try { await apiJson(`/api/files/${p.nodeId}/upload`,{method:"POST",body:fd}); toast(`已上传: ${f.name}`,"success"); } catch(err){ toast(`上传失败: ${err.message}`,"error"); } } refreshPanel(activePanel); });
+    main.addEventListener("drop", async e => { if (dragData) return; e.preventDefault(); dc=0; overlay.classList.add("hidden"); const p = ap(); if (p.nodeId == null) return; const files = e.dataTransfer.files; if (!files.length) return; for (const f of files) { const fd = new FormData(); fd.append("path",p.path); fd.append("file",f); try { await apiJson(`/api/files/${p.nodeId}/upload`,{method:"POST",body:fd}); toast(`已上传: ${f.name}`,"success"); } catch(err){ toast(`上传失败: ${err.message}`,"error"); } } refreshPanel(activePanel); });
 }
 
 /* ========== Helpers ========== */
