@@ -100,8 +100,7 @@ class SSHConnection:
 
     def write_file(self, path: str, data: bytes):
         self.ensure_connected()
-        with self.sftp.open(path, "wb") as f:
-            f.write(data)
+        self.sftp.putfo(io.BytesIO(data), path, confirm=True)
 
     def mkdir(self, path: str):
         self.ensure_connected()

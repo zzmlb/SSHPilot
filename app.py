@@ -632,6 +632,8 @@ async def transfer_file(body: TransferAction):
                 raise RuntimeError(f"源压缩失败: {err.strip()}")
             try:
                 data = await run_sync(src_conn.read_file, tmp_name)
+                _log.info("transfer dir %s (%d bytes tar) -> node %s:%s",
+                           src_path, len(data), body.dst_node_id, dst_path)
                 if len(data) > MAX_TRANSFER_SIZE:
                     raise HTTPException(413, f"目录过大 ({len(data)} bytes), 超出传输限制")
                 await run_sync(dst_conn.write_file, tmp_name, data)
@@ -640,6 +642,7 @@ async def transfer_file(body: TransferAction):
                     f"cd {q(dst_path)} && tar xzf {q(tmp_name)}"
                 )
                 if err2.strip() and "tar:" not in err2:
+                    _log.warning("transfer untar stderr: %s", err2.strip())
                     raise RuntimeError(f"目标解压失败: {err2.strip()}")
             finally:
                 await run_sync(src_conn.exec_command, f"rm -f {q(tmp_name)}")
@@ -650,7 +653,14 @@ async def transfer_file(body: TransferAction):
                 raise HTTPException(413, f"文件过大 ({st.st_size} bytes), 超出传输限制")
             data = await run_sync(src_conn.read_file, src_path)
             dst_full = dst_path.rstrip("/") + "/" + basename_name
+            _log.info("transfer file %s (%d bytes) -> node %s:%s",
+                       src_path, len(data), body.dst_node_id, dst_full)
             await run_sync(dst_conn.write_file, dst_full, data)
+            try:
+                dst_st = await run_sync(dst_conn.get_stat, dst_full)
+                _log.info("transfer verify: dst size=%d, src size=%d", dst_st.st_size, len(data))
+            except Exception as ve:
+                _log.warning("transfer verify failed: %s", ve)
             return {"ok": True, "type": "file", "name": basename_name, "size": len(data)}
     except HTTPException:
         raise
