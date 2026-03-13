@@ -28,40 +28,81 @@ class SSHConnection:
         self._trash_dir: Optional[str] = None
 
     def connect(self):
-        self.client = paramiko.SSHClient()
-        self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        kwargs = {
+        base_kwargs = {
             "hostname": self.host,
             "port": self.port,
             "username": self.username,
             "timeout": 10,
+            "allow_agent": False,
+            "look_for_keys": False,
         }
         if self.auth_type == "key_file":
-            ssh_dir = os.path.expanduser("~/.ssh")
-            key_files = []
-            for name in ("id_ed25519", "id_ecdsa", "id_rsa", "id_dsa"):
-                p = os.path.join(ssh_dir, name)
-                if os.path.isfile(p):
-                    key_files.append(p)
-            if key_files:
-                kwargs["key_filename"] = key_files
-            kwargs["look_for_keys"] = True
-            kwargs["allow_agent"] = False
+            self._connect_with_key_file(base_kwargs)
         elif self.auth_type == "key" and self.private_key:
-            pkey = None
-            for key_cls in (paramiko.Ed25519Key, paramiko.ECDSAKey, paramiko.RSAKey, paramiko.DSSKey):
+            self._connect_with_pasted_key(base_kwargs)
+        else:
+            self.client = paramiko.SSHClient()
+            self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            self.client.connect(**base_kwargs, password=self.password)
+            self.sftp = self.client.open_sftp()
+            self.last_active = time.time()
+
+    def _connect_with_key_file(self, base_kwargs: dict):
+        ssh_dir = os.path.expanduser("~/.ssh")
+        key_classes = (paramiko.Ed25519Key, paramiko.ECDSAKey, paramiko.RSAKey, paramiko.DSSKey)
+        loaded_keys = []
+        for name in ("id_ed25519", "id_ecdsa", "id_rsa", "id_dsa"):
+            p = os.path.join(ssh_dir, name)
+            if not os.path.isfile(p):
+                continue
+            for cls in key_classes:
                 try:
-                    pkey = key_cls.from_private_key(io.StringIO(self.private_key))
+                    loaded_keys.append(cls.from_private_key_file(p))
                     break
                 except Exception:
                     continue
-            if pkey is None:
-                raise paramiko.SSHException("Unsupported private key format")
-            kwargs["pkey"] = pkey
-        else:
-            kwargs["password"] = self.password
-            kwargs["look_for_keys"] = False
-        self.client.connect(**kwargs)
+        last_err: Exception = paramiko.SSHException("No SSH key found in ~/.ssh/")
+        for pkey in loaded_keys:
+            try:
+                cli = paramiko.SSHClient()
+                cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                cli.connect(**base_kwargs, pkey=pkey)
+                self.client = cli
+                self.sftp = cli.open_sftp()
+                self.last_active = time.time()
+                return
+            except Exception as e:
+                last_err = e
+                try:
+                    cli.close()
+                except Exception:
+                    pass
+        # fallback: let paramiko discover keys itself
+        try:
+            cli = paramiko.SSHClient()
+            cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            cli.connect(**{**base_kwargs, "look_for_keys": True})
+            self.client = cli
+            self.sftp = cli.open_sftp()
+            self.last_active = time.time()
+            return
+        except Exception as e:
+            last_err = e
+        raise last_err
+
+    def _connect_with_pasted_key(self, base_kwargs: dict):
+        pkey = None
+        for key_cls in (paramiko.Ed25519Key, paramiko.ECDSAKey, paramiko.RSAKey, paramiko.DSSKey):
+            try:
+                pkey = key_cls.from_private_key(io.StringIO(self.private_key))
+                break
+            except Exception:
+                continue
+        if pkey is None:
+            raise paramiko.SSHException("Unsupported private key format")
+        self.client = paramiko.SSHClient()
+        self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        self.client.connect(**base_kwargs, pkey=pkey)
         self.sftp = self.client.open_sftp()
         self.last_active = time.time()
 
