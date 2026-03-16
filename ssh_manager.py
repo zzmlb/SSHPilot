@@ -8,6 +8,11 @@ from typing import Optional
 
 import paramiko
 
+_KEY_CLASSES = tuple(filter(None, (
+    paramiko.Ed25519Key, paramiko.ECDSAKey, paramiko.RSAKey,
+    getattr(paramiko, "DSSKey", None),
+)))
+
 TRASH_DIR = "~/.ssh-fm-trash"
 
 
@@ -49,9 +54,9 @@ class SSHConnection:
 
     def _connect_with_key_file(self, base_kwargs: dict):
         ssh_dir = os.path.expanduser("~/.ssh")
-        key_classes = (paramiko.Ed25519Key, paramiko.ECDSAKey, paramiko.RSAKey, paramiko.DSSKey)
+        key_classes = _KEY_CLASSES
         loaded_keys = []
-        for name in ("id_ed25519", "id_ecdsa", "id_rsa", "id_dsa"):
+        for name in ("id_ed25519", "id_ecdsa", "id_rsa"):
             p = os.path.join(ssh_dir, name)
             if not os.path.isfile(p):
                 continue
@@ -92,7 +97,7 @@ class SSHConnection:
 
     def _connect_with_pasted_key(self, base_kwargs: dict):
         pkey = None
-        for key_cls in (paramiko.Ed25519Key, paramiko.ECDSAKey, paramiko.RSAKey, paramiko.DSSKey):
+        for key_cls in _KEY_CLASSES:
             try:
                 pkey = key_cls.from_private_key(io.StringIO(self.private_key))
                 break
