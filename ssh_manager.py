@@ -113,7 +113,21 @@ class SSHConnection:
 
     def ensure_connected(self):
         with self._lock:
-            if self.client is None or self.client.get_transport() is None or not self.client.get_transport().is_active():
+            need_reconnect = True
+            try:
+                t = self.client.get_transport() if self.client else None
+                if t is not None and t.is_active():
+                    need_reconnect = False
+            except (OSError, EOFError, paramiko.SSHException):
+                pass
+            if need_reconnect:
+                if self.client:
+                    try:
+                        self.client.close()
+                    except Exception:
+                        pass
+                    self.client = None
+                    self.sftp = None
                 self.connect()
             self.last_active = time.time()
 
