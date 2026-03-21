@@ -53,6 +53,23 @@ class SSHConnection:
             self.last_active = time.time()
 
     def _connect_with_key_file(self, base_kwargs: dict):
+        # 1) Try SSH Agent first (works when keys are passphrase-protected
+        #    and loaded in ssh-agent, matching terminal `ssh` behavior)
+        try:
+            cli = paramiko.SSHClient()
+            cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            cli.connect(**{**base_kwargs, "allow_agent": True, "look_for_keys": True})
+            self.client = cli
+            self.sftp = cli.open_sftp()
+            self.last_active = time.time()
+            return
+        except Exception:
+            try:
+                cli.close()
+            except Exception:
+                pass
+
+        # 2) Try each key file individually with a fresh client
         ssh_dir = os.path.expanduser("~/.ssh")
         loaded_keys = []
         for name in ("id_ed25519", "id_ecdsa", "id_rsa"):
@@ -65,8 +82,6 @@ class SSHConnection:
                     break
                 except Exception:
                     continue
-        if not loaded_keys:
-            raise paramiko.AuthenticationException("未找到可用的 SSH 密钥文件 (~/.ssh/id_*)")
         auth_err = None
         for pkey in loaded_keys:
             cli = paramiko.SSHClient()
@@ -79,19 +94,19 @@ class SSHConnection:
                 return
             except paramiko.AuthenticationException as e:
                 auth_err = e
-                try:
-                    cli.close()
-                except Exception:
-                    pass
             except Exception:
-                try:
-                    cli.close()
-                except Exception:
-                    pass
+                pass
+            finally:
+                if self.client is not cli:
+                    try:
+                        cli.close()
+                    except Exception:
+                        pass
         if auth_err:
             raise paramiko.AuthenticationException(
-                f"所有密钥均认证失败，目标服务器不接受本机密钥 ({auth_err})")
-        raise paramiko.AuthenticationException("密钥认证失败")
+                f"密钥认证失败，目标服务器不接受本机密钥 ({auth_err})")
+        raise paramiko.AuthenticationException(
+            "无法连接: SSH Agent 不可用且未找到可用密钥文件")
 
     def _connect_with_pasted_key(self, base_kwargs: dict):
         pkey = None
