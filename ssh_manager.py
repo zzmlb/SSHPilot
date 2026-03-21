@@ -53,60 +53,59 @@ class SSHConnection:
             self.last_active = time.time()
 
     def _connect_with_key_file(self, base_kwargs: dict):
-        # 1) Try SSH Agent first (works when keys are passphrase-protected
-        #    and loaded in ssh-agent, matching terminal `ssh` behavior)
-        try:
-            cli = paramiko.SSHClient()
-            cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            cli.connect(**{**base_kwargs, "allow_agent": True, "look_for_keys": True})
-            self.client = cli
-            self.sftp = cli.open_sftp()
-            self.last_active = time.time()
-            return
-        except Exception:
-            try:
-                cli.close()
-            except Exception:
-                pass
+        attempts = []
 
-        # 2) Try each key file individually with a fresh client
-        ssh_dir = os.path.expanduser("~/.ssh")
-        loaded_keys = []
-        for name in ("id_ed25519", "id_ecdsa", "id_rsa"):
-            p = os.path.join(ssh_dir, name)
-            if not os.path.isfile(p):
-                continue
-            for cls in _KEY_CLASSES:
-                try:
-                    loaded_keys.append(cls.from_private_key_file(p))
-                    break
-                except Exception:
-                    continue
-        auth_err = None
-        for pkey in loaded_keys:
+        def _try_connect(**kw):
             cli = paramiko.SSHClient()
             cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             try:
-                cli.connect(**base_kwargs, pkey=pkey)
+                cli.connect(**{**base_kwargs, **kw})
                 self.client = cli
                 self.sftp = cli.open_sftp()
                 self.last_active = time.time()
+                return True
+            except Exception as e:
+                attempts.append(e)
+                try:
+                    cli.close()
+                except Exception:
+                    pass
+                return False
+
+        # 1) SSH Agent + auto key discovery (matches terminal ssh behavior)
+        if _try_connect(allow_agent=True, look_for_keys=True):
+            return
+
+        # 2) Explicit key_filename list with agent
+        ssh_dir = os.path.expanduser("~/.ssh")
+        key_paths = [os.path.join(ssh_dir, n) for n in
+                     ("id_ed25519", "id_ecdsa", "id_rsa") if
+                     os.path.isfile(os.path.join(ssh_dir, n))]
+        if key_paths:
+            if _try_connect(key_filename=key_paths, allow_agent=True):
                 return
-            except paramiko.AuthenticationException as e:
-                auth_err = e
-            except Exception:
-                pass
-            finally:
-                if self.client is not cli:
-                    try:
-                        cli.close()
-                    except Exception:
-                        pass
-        if auth_err:
+            for kp in key_paths:
+                if _try_connect(key_filename=[kp], allow_agent=True):
+                    return
+
+        # 3) Pre-loaded pkey objects (no passphrase)
+        for kp in key_paths:
+            for cls in _KEY_CLASSES:
+                try:
+                    pkey = cls.from_private_key_file(kp)
+                    if _try_connect(pkey=pkey):
+                        return
+                    break
+                except Exception:
+                    continue
+
+        auth_errors = [e for e in attempts if isinstance(e, paramiko.AuthenticationException)]
+        if auth_errors:
             raise paramiko.AuthenticationException(
-                f"密钥认证失败，目标服务器不接受本机密钥 ({auth_err})")
-        raise paramiko.AuthenticationException(
-            "无法连接: SSH Agent 不可用且未找到可用密钥文件")
+                f"密钥认证失败，目标服务器不接受本机密钥 ({auth_errors[0]})")
+        hint = f" (尝试了 {len(attempts)} 种方式)" if attempts else ""
+        raise paramiko.SSHException(
+            f"SSH密钥连接失败{hint}: {attempts[-1] if attempts else '未找到密钥'}")
 
     def _connect_with_pasted_key(self, base_kwargs: dict):
         pkey = None
