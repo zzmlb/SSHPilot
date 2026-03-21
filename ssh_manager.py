@@ -476,16 +476,24 @@ class ConnectionPool:
         with self._lock:
             conn = self._pool.get(node_id)
             if conn is not None:
-                conn.ensure_connected()
-                return conn
+                try:
+                    conn.ensure_connected()
+                    return conn
+                except Exception:
+                    self._pool.pop(node_id, None)
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
         new_conn = SSHConnection(**kwargs)
         new_conn.connect()
         with self._lock:
-            existing = self._pool.get(node_id)
-            if existing is not None:
-                new_conn.close()
-                existing.ensure_connected()
-                return existing
+            existing = self._pool.pop(node_id, None)
+            if existing:
+                try:
+                    existing.close()
+                except Exception:
+                    pass
             self._pool[node_id] = new_conn
             return new_conn
 

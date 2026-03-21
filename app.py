@@ -386,7 +386,12 @@ async def test_connect(node_id: int):
     conn = await get_conn(node_id)
     if node_id == 0:
         return {"status": "connected", "echo": "ok"}
-    out, _ = await run_sync(conn.exec_command, "echo ok")
+    try:
+        out, _ = await run_sync(conn.exec_command, "echo ok")
+    except Exception:
+        pool.remove(node_id)
+        conn = await get_conn(node_id)
+        out, _ = await run_sync(conn.exec_command, "echo ok")
     asyncio.ensure_future(_cache_hw_info(node_id, conn))
     return {"status": "connected", "echo": out.strip()}
 
