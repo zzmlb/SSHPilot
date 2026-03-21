@@ -692,12 +692,14 @@ function makeListRow(side, f) {
     const p = P[side];
     const full = p.path === "/" ? `/${f.name}` : `${p.path}/${f.name}`;
     const icon = getIcon(f);
+    const nameAction = f.is_dir ? `panelNavigateTo('${side}','${escJs(full)}')` : isPreviewable(f.name) ? `openPreview('${side}','${escJs(full)}')` : isEditable(f.name) ? `openEditor('${side}','${escJs(full)}')` : '';
     return `<tr draggable="true" ondragstart="onFileDragStart(event,'${side}','${escJs(full)}','${escJs(f.name)}',${f.is_dir})">
         <td><input type="checkbox" class="file-check" data-side="${side}" data-path="${esc(full)}" data-name="${esc(f.name)}"></td>
-        <td><span class="file-icon ${f.is_dir?'dir':''} ${isArchive(f.name)?'archive':''}"><i class="${icon}"></i></span><a class="file-name-link" onclick="${f.is_dir ? `panelNavigateTo('${side}','${escJs(full)}')` : ''}">${esc(f.name)}</a></td>
+        <td><span class="file-icon ${f.is_dir?'dir':''} ${isArchive(f.name)?'archive':''}"><i class="${icon}"></i></span><a class="file-name-link" onclick="${nameAction}">${esc(f.name)}</a></td>
         <td>${f.is_dir ? "-" : formatSize(f.size)}</td>
         <td>${formatTime(f.mtime)}</td>
         <td><div class="file-actions">
+            ${!f.is_dir && isPreviewable(f.name) ? `<button class="btn-icon" title="预览" onclick="openPreview('${side}','${escJs(full)}')"><i class="fas fa-eye" style="color:var(--accent)"></i></button>` : ""}
             ${!f.is_dir && isEditable(f.name) ? `<button class="btn-icon" title="编辑" onclick="openEditor('${side}','${escJs(full)}')"><i class="fas fa-edit" style="color:var(--success)"></i></button>` : ""}
             ${!f.is_dir ? `<button class="btn-icon" title="下载" onclick="downloadFile('${side}','${escJs(full)}')"><i class="fas fa-download"></i></button>` : ""}
             ${panelMode==="dual"?`<button class="btn-icon" title="发送到对面" onclick="transferToOther('${side}','${escJs(full)}',${f.is_dir})"><i class="fas fa-exchange-alt" style="color:var(--accent)"></i></button>`:""}
@@ -716,8 +718,8 @@ function makeGridCard(side, f) {
     card.ondragstart = (e) => onFileDragStart(e, side, full, f.name, f.is_dir);
     card.innerHTML = `
         <input type="checkbox" class="file-check grid-check" data-side="${side}" data-path="${esc(full)}" data-name="${esc(f.name)}">
-        <div class="grid-icon ${f.is_dir?'dir':''}" onclick="${f.is_dir ? `panelNavigateTo('${side}','${escJs(full)}')` : ''}"><i class="${icon}"></i></div>
-        <div class="grid-name" title="${esc(f.name)}">${esc(f.name)}</div>
+        <div class="grid-icon ${f.is_dir?'dir':''}" onclick="${f.is_dir ? `panelNavigateTo('${side}','${escJs(full)}')` : isPreviewable(f.name) ? `openPreview('${side}','${escJs(full)}')` : ''}"><i class="${icon}"></i></div>
+        <div class="grid-name" title="${esc(f.name)}" onclick="${!f.is_dir && isPreviewable(f.name) ? `openPreview('${side}','${escJs(full)}')` : ''}" style="${!f.is_dir && isPreviewable(f.name) ? 'cursor:pointer' : ''}">${esc(f.name)}</div>
         <div class="grid-meta">${f.is_dir ? "文件夹" : formatSize(f.size)}</div>
         <div class="grid-actions">
             ${panelMode==="dual"?`<button class="btn-icon" title="发送到对面" onclick="transferToOther('${side}','${escJs(full)}',${f.is_dir})"><i class="fas fa-exchange-alt"></i></button>`:""}
@@ -931,6 +933,39 @@ function formatSize(b) { if(b<1024) return b+" B"; if(b<1048576) return (b/1024)
 function formatTime(ts) { if(!ts) return "-"; return new Date(ts*1000).toLocaleString("zh-CN"); }
 function isArchive(n) { return /\.(tar\.gz|tgz|tar|zip|gz|bz2|xz|rar|7z)$/i.test(n); }
 function isEditable(n) { return /\.(txt|log|md|json|xml|yaml|yml|toml|ini|conf|cfg|env|sh|bash|py|js|ts|jsx|tsx|go|rs|java|c|cpp|h|hpp|cs|rb|php|lua|sql|html|htm|css|scss|less|vue|svelte|dockerfile|makefile|csv)$/i.test(n) || /^(Makefile|Dockerfile|\.env.*|\.gitignore|README|LICENSE|CHANGELOG)$/i.test(n); }
+function isPreviewable(n) { return /\.(jpg|jpeg|png|gif|webp|svg|bmp|ico|mp4|webm|mp3|wav|ogg|pdf)$/i.test(n); }
+
+function openPreview(side, path) {
+    const nodeId = P[side].nodeId;
+    const name = path.split("/").pop();
+    const ext = name.split(".").pop().toLowerCase();
+    const url = `/api/files/${nodeId}/preview?path=${encodeURIComponent(path)}`;
+    document.getElementById("preview-filename").textContent = name;
+    document.getElementById("preview-dl-btn").onclick = () => downloadFile(side, path);
+    const body = document.getElementById("preview-body");
+    body.innerHTML = '<div class="preview-loading"><i class="fas fa-spinner fa-spin"></i> 加载中…</div>';
+    document.getElementById("preview-modal").classList.remove("hidden");
+
+    if (/^(jpg|jpeg|png|gif|webp|svg|bmp|ico)$/i.test(ext)) {
+        const img = new Image();
+        img.onload = () => { body.innerHTML = ""; body.appendChild(img); };
+        img.onerror = () => { body.innerHTML = '<div class="preview-error">图片加载失败</div>'; };
+        img.src = url;
+    } else if (/^(mp4|webm)$/i.test(ext)) {
+        body.innerHTML = `<video controls autoplay src="${url}"></video>`;
+    } else if (/^(mp3|wav|ogg)$/i.test(ext)) {
+        body.innerHTML = `<audio controls autoplay src="${url}"></audio>`;
+    } else if (ext === "pdf") {
+        body.innerHTML = `<iframe src="${url}"></iframe>`;
+    }
+}
+
+function closePreview() {
+    document.getElementById("preview-modal").classList.add("hidden");
+    const body = document.getElementById("preview-body");
+    body.querySelectorAll("video,audio").forEach(el => { el.pause(); el.src = ""; });
+    body.innerHTML = "";
+}
 function getIcon(f) { if(f.is_dir) return "fas fa-folder"; if(isArchive(f.name)) return "fas fa-file-archive"; if(/\.(jpg|jpeg|png|gif|svg|webp)$/i.test(f.name)) return "fas fa-file-image"; if(/\.(mp4|avi|mkv|mov)$/i.test(f.name)) return "fas fa-file-video"; if(/\.(mp3|wav|flac|ogg)$/i.test(f.name)) return "fas fa-file-audio"; if(/\.(pdf)$/i.test(f.name)) return "fas fa-file-pdf"; if(/\.(py|js|ts|go|rs|java|c|cpp|h|sh|html|css|json|xml|yaml|yml|md|txt|log|conf)$/i.test(f.name)) return "fas fa-file-code"; return "fas fa-file"; }
 
 /* ========== Init ========== */

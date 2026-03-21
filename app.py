@@ -57,7 +57,9 @@ class SecurityMiddleware(BaseHTTPMiddleware):
             "style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; "
             "font-src 'self' https://cdnjs.cloudflare.com; "
             "script-src 'self' 'unsafe-inline'; "
-            "img-src 'self' data:; "
+            "img-src 'self' data: blob:; "
+            "media-src 'self' blob:; "
+            "frame-src 'self' blob:; "
             "connect-src 'self'"
         )
         return response
@@ -439,6 +441,40 @@ async def download_file(node_id: int, path: str = Query(...)):
             media_type="application/octet-stream",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(500, _safe_err(e))
+
+
+MAX_PREVIEW_SIZE = 20 * 1024 * 1024  # 20MB
+
+MIME_MAP = {
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+    ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml",
+    ".bmp": "image/bmp", ".ico": "image/x-icon",
+    ".mp4": "video/mp4", ".webm": "video/webm",
+    ".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg",
+    ".pdf": "application/pdf",
+}
+
+
+@app.get("/api/files/{node_id}/preview")
+async def preview_file(node_id: int, path: str = Query(...)):
+    path = _validate_path(path)
+    conn = await get_conn(node_id)
+    try:
+        st = await run_sync(conn.get_stat, path)
+        if stat.S_ISDIR(st.st_mode):
+            raise HTTPException(400, "Cannot preview a directory")
+        if st.st_size > MAX_PREVIEW_SIZE:
+            raise HTTPException(413, "文件过大，无法预览")
+        ext = os.path.splitext(path)[1].lower()
+        mime = MIME_MAP.get(ext)
+        if not mime:
+            raise HTTPException(415, "不支持预览该文件类型")
+        data = await run_sync(conn.read_file, path)
+        return Response(content=data, media_type=mime)
     except HTTPException:
         raise
     except Exception as e:
