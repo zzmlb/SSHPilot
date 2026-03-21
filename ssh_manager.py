@@ -54,46 +54,44 @@ class SSHConnection:
 
     def _connect_with_key_file(self, base_kwargs: dict):
         ssh_dir = os.path.expanduser("~/.ssh")
-        key_classes = _KEY_CLASSES
         loaded_keys = []
         for name in ("id_ed25519", "id_ecdsa", "id_rsa"):
             p = os.path.join(ssh_dir, name)
             if not os.path.isfile(p):
                 continue
-            for cls in key_classes:
+            for cls in _KEY_CLASSES:
                 try:
                     loaded_keys.append(cls.from_private_key_file(p))
                     break
                 except Exception:
                     continue
-        last_err: Exception = paramiko.SSHException("No SSH key found in ~/.ssh/")
+        if not loaded_keys:
+            raise paramiko.AuthenticationException("未找到可用的 SSH 密钥文件 (~/.ssh/id_*)")
+        auth_err = None
         for pkey in loaded_keys:
+            cli = paramiko.SSHClient()
+            cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             try:
-                cli = paramiko.SSHClient()
-                cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
                 cli.connect(**base_kwargs, pkey=pkey)
                 self.client = cli
                 self.sftp = cli.open_sftp()
                 self.last_active = time.time()
                 return
-            except Exception as e:
-                last_err = e
+            except paramiko.AuthenticationException as e:
+                auth_err = e
                 try:
                     cli.close()
                 except Exception:
                     pass
-        # fallback: let paramiko discover keys itself
-        try:
-            cli = paramiko.SSHClient()
-            cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            cli.connect(**{**base_kwargs, "look_for_keys": True})
-            self.client = cli
-            self.sftp = cli.open_sftp()
-            self.last_active = time.time()
-            return
-        except Exception as e:
-            last_err = e
-        raise last_err
+            except Exception:
+                try:
+                    cli.close()
+                except Exception:
+                    pass
+        if auth_err:
+            raise paramiko.AuthenticationException(
+                f"所有密钥均认证失败，目标服务器不接受本机密钥 ({auth_err})")
+        raise paramiko.AuthenticationException("密钥认证失败")
 
     def _connect_with_pasted_key(self, base_kwargs: dict):
         pkey = None
